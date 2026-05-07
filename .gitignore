@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Logs and Data
+logs/
+data/
+catalog/
+*.txt
+*.csv
+*.png
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

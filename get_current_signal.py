@@ -173,7 +173,7 @@ async def get_signal():
                 trend_report = f"📈 *SIGNAL: BREAKOUT LONG*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
                 log_to_file(f"Trend: BREAKOUT LONG Signal Sent (Price: {current_close:.5f})")
                 await send_telegram_msg(trend_report)
-                execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=LOT_SIZE_TREND)
+                execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
             else:
                 print("Trend: Breakout detected but Trend position already open. Skipping.")
         elif current_close < lower_channel:
@@ -184,7 +184,7 @@ async def get_signal():
                 trend_report = f"🔴 *SIGNAL: BREAKOUT SHORT*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
                 log_to_file(f"Trend: BREAKOUT SHORT Signal Sent (Price: {current_close:.5f})")
                 await send_telegram_msg(trend_report)
-                execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=LOT_SIZE_TREND)
+                execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
             else:
                 print("Trend: Breakout detected but Trend position already open. Skipping.")
         elif current_close < exit_lower or current_close > exit_upper:
@@ -250,7 +250,7 @@ async def get_signal():
                     log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
                     await send_telegram_msg(ml_report)
                     # Safe volume for $5k Prop Account
-                    execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI)
+                    execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level)
                 else:
                     print(f"AI: {asset} position already open. Skipping.")
             else:

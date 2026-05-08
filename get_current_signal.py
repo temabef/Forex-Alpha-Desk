@@ -21,10 +21,13 @@ os.chdir(script_dir)
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# --- RISK CONFIGURATION (For $5k Prop Account) ---
 ENTRY_THRESHOLD = 2.0
 EXIT_THRESHOLD = 0.2
 ML_CONFIDENCE_THRESHOLD = 0.58 
-LOT_SIZE = 20000 # 0.20 Lots (Adjust based on account size)
+LOT_SIZE_AI = 0.05
+LOT_SIZE_PAIRS = 0.02
+LOT_SIZE_TREND = 0.05
 
 def log_to_file(message):
     with open("logs/signal_history.txt", "a", encoding="utf-8") as f:
@@ -99,8 +102,8 @@ async def get_signal():
                 msg = f"🚨 *SIGNAL: SELL SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: SELL EURUSD, BUY GBPUSD"
                 log_to_file(f"Pairs: SELL SPREAD Signal Sent (Z-Score: {z_score:.2f})")
                 await send_telegram_msg(msg)
-                execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=0.2)
-                execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=0.2)
+                execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
+                execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
             else:
                 log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
                 print("Pairs: Already in trade, suppressing duplicate SELL alert.")
@@ -110,8 +113,8 @@ async def get_signal():
                 msg = f"🚀 *SIGNAL: BUY SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: BUY EURUSD, SELL GBPUSD"
                 log_to_file(f"Pairs: BUY SPREAD Signal Sent (Z-Score: {z_score:.2f})")
                 await send_telegram_msg(msg)
-                execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=0.2)
-                execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=0.2)
+                execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
+                execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
             else:
                 log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
                 print("Pairs: Already in trade, suppressing duplicate BUY alert.")
@@ -170,7 +173,7 @@ async def get_signal():
                 trend_report = f"📈 *SIGNAL: BREAKOUT LONG*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
                 log_to_file(f"Trend: BREAKOUT LONG Signal Sent (Price: {current_close:.5f})")
                 await send_telegram_msg(trend_report)
-                execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=0.2)
+                execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=LOT_SIZE_TREND)
             else:
                 print("Trend: Breakout detected but Trend position already open. Skipping.")
         elif current_close < lower_channel:
@@ -181,7 +184,7 @@ async def get_signal():
                 trend_report = f"🔴 *SIGNAL: BREAKOUT SHORT*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
                 log_to_file(f"Trend: BREAKOUT SHORT Signal Sent (Price: {current_close:.5f})")
                 await send_telegram_msg(trend_report)
-                execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=0.2)
+                execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=LOT_SIZE_TREND)
             else:
                 print("Trend: Breakout detected but Trend position already open. Skipping.")
         elif current_close < exit_lower or current_close > exit_upper:
@@ -247,7 +250,7 @@ async def get_signal():
                     log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
                     await send_telegram_msg(ml_report)
                     # Safe volume for $5k Prop Account
-                    execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=0.05)
+                    execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI)
                 else:
                     print(f"AI: {asset} position already open. Skipping.")
             else:

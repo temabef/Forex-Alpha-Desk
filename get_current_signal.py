@@ -1,5 +1,4 @@
 import pandas as pd
-import yfinance as yf
 import numpy as np
 import statsmodels.api as sm
 import asyncio
@@ -45,6 +44,25 @@ async def send_telegram_msg(message):
     except Exception as e:
         print(f"FAILED to send Telegram: {e}")
 
+def fetch_mt5_data(symbol, num_bars=1500):
+    """
+    Fetches the latest H1 (Hourly) candle data directly from MT5.
+    """
+    terminal_path = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
+    if not mt5.initialize(path=terminal_path):
+        print(f"MT5 initialize() failed for data fetch")
+        return None
+        
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, num_bars)
+    if rates is None or len(rates) == 0:
+        return None
+        
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
+    return df
+
 async def get_signal():
     print(f"--- Multi-Strategy Live Signal Report ---")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -53,21 +71,17 @@ async def get_signal():
     log_to_file(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # --- SYMBOL CONFIG ---
-    # Added USDJPY for the AI Strategy
-    symbols = {"EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X"}
-    raw_data = {}
+    symbols = ["EURUSD", "GBPUSD", "USDJPY"]
     raw_data = {}
 
-    # Fetch recent data (60 days for ML training)
-    for name, ticker in symbols.items():
-        print(f"Fetching latest data for {name}...")
-        df = yf.download(ticker, period="60d", interval="1h", progress=False)
-        if df.empty or len(df) < 60:
-            print(f"⚠️ WARNING: Not enough data for {name}. Skipping strategy logic.")
+    # Fetch recent data directly from MT5 (1500 bars ~ 60 trading days of H1)
+    for symbol in symbols:
+        print(f"Fetching latest data for {symbol} from MT5...")
+        df = fetch_mt5_data(symbol, num_bars=1500)
+        if df is None or df.empty or len(df) < 60:
+            print(f"⚠️ WARNING: Not enough data for {symbol} in MT5. Skipping strategy logic.")
             continue
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
-        raw_data[name] = df
+        raw_data[symbol] = df
 
     print("\n" + "="*40)
     print("STRATEGY 1: PAIRS TRADING (Mean Reversion)")

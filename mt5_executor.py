@@ -26,18 +26,22 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
         print("MT5 initialize() failed")
         return False
 
+    # Append broker suffix
+    suffix = os.getenv("SYMBOL_SUFFIX", "")
+    broker_symbol = f"{symbol}{suffix}"
+
     # Get symbol properties
-    symbol_info = mt5.symbol_info(symbol)
+    symbol_info = mt5.symbol_info(broker_symbol)
     if symbol_info is None:
-        print(f"Symbol {symbol} not found")
+        print(f"Symbol {broker_symbol} not found")
         return False
 
     # Ensure symbol is visible
     if not symbol_info.visible:
-        mt5.symbol_select(symbol, True)
+        mt5.symbol_select(broker_symbol, True)
 
     # 1. Rounding Price Logic
-    tick = mt5.symbol_info_tick(symbol)
+    tick = mt5.symbol_info_tick(broker_symbol)
     if tick is None:
         return False
         
@@ -51,7 +55,7 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
     else: filling_type = mt5.ORDER_FILLING_RETURN
 
     # 3. Position Check (Strategy Isolation)
-    positions = mt5.positions_get(symbol=symbol)
+    positions = mt5.positions_get(symbol=broker_symbol)
     strategy_pos = None
     if positions:
         for p in positions:
@@ -87,7 +91,7 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
+        "symbol": broker_symbol,
         "volume": float(volume) if action != 'EXIT' else float(strategy_pos.volume),
         "type": int(order_type),
         "price": float(price),
@@ -123,9 +127,13 @@ def get_mt5_active_positions(strategy_name=None):
         return []
     
     magic = MAGIC_NUMBERS.get(strategy_name)
+    suffix = os.getenv("SYMBOL_SUFFIX", "")
+    
     active_symbols = []
     for p in positions:
         if magic is None or p.magic == magic:
-            active_symbols.append(p.symbol)
+            # Strip the suffix before returning to the main logic
+            clean_symbol = p.symbol.replace(suffix, "") if suffix else p.symbol
+            active_symbols.append(clean_symbol)
             
     return active_symbols

@@ -53,8 +53,13 @@ def fetch_mt5_data(symbol, num_bars=1500):
         print(f"MT5 initialize() failed for data fetch")
         return None
         
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, num_bars)
+    # Append broker suffix if necessary (e.g. .x)
+    suffix = os.getenv("SYMBOL_SUFFIX", "")
+    broker_symbol = f"{symbol}{suffix}"
+        
+    rates = mt5.copy_rates_from_pos(broker_symbol, mt5.TIMEFRAME_H1, 0, num_bars)
     if rates is None or len(rates) == 0:
+        print(f"Failed to fetch data for {broker_symbol}")
         return None
         
     df = pd.DataFrame(rates)

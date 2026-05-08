@@ -79,18 +79,27 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, tp_pip
 
     order_type = mt5.ORDER_TYPE_BUY if action == 'BUY' or action == 'BUY_SPREAD' else mt5.ORDER_TYPE_SELL
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-    
-    sl = price - (sl_pips * 10 * point) if order_type == mt5.ORDER_TYPE_BUY else price + (sl_pips * 10 * point)
-    tp = price + (tp_pips * 10 * point) if order_type == mt5.ORDER_TYPE_BUY else price - (tp_pips * 10 * point)
+    # 4. Prepare SL/TP (The 50-Pip Safety Net)
+    # 0.01 for JPY, 0.0001 for others
+    pip_size = 0.01 if "JPY" in symbol else 0.0001
+    sl_distance = 50 * pip_size
+    tp_distance = 50 * pip_size
+
+    if action != 'EXIT':
+        sl = price - sl_distance if order_type == mt5.ORDER_TYPE_BUY else price + sl_distance
+        tp = price + tp_distance if order_type == mt5.ORDER_TYPE_BUY else price - tp_distance
+    else:
+        sl = 0.0
+        tp = 0.0
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
-        "volume": volume,
+        "volume": volume if action != 'EXIT' else strategy_pos.volume,
         "type": order_type,
         "price": price,
-        "sl": sl,
-        "tp": tp,
+        "sl": round(sl, symbol_info.digits) if sl > 0 else 0.0,
+        "tp": round(tp, symbol_info.digits) if tp > 0 else 0.0,
         "magic": magic,
         "comment": f"{strategy_name} Trade",
         "type_time": mt5.ORDER_TIME_GTC,

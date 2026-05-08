@@ -26,9 +26,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENTRY_THRESHOLD = 2.0
 EXIT_THRESHOLD = 0.2
 ML_CONFIDENCE_THRESHOLD = 0.58 
-LOT_SIZE_AI = 0.05
-LOT_SIZE_PAIRS = 0.02
-LOT_SIZE_TREND = 0.05
+LOT_SIZE_AI = float(os.getenv("LOT_SIZE_AI", 0.05))
+LOT_SIZE_PAIRS = float(os.getenv("LOT_SIZE_PAIRS", 0.02))
+LOT_SIZE_TREND = float(os.getenv("LOT_SIZE_TREND", 0.05))
 
 def log_to_file(message):
     with open("logs/signal_history.txt", "a", encoding="utf-8") as f:

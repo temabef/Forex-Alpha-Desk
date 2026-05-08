@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Path to your MT5 terminal (Update this for your RDP environment)
-TERMINAL_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+# Path to your MT5 terminal (Dynamic via .env for multi-account setup)
+TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 
 # Magic Numbers for Strategy Isolation
 MAGIC_NUMBERS = {

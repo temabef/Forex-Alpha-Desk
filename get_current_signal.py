@@ -208,6 +208,10 @@ async def get_signal():
     print("="*40)
     
     for asset in ["EURUSD", "USDJPY"]:
+        if asset not in raw_data:
+            print(f"⚠️ SKIPPING AI analysis for {asset}: Missing data.")
+            continue
+            
         print(f"\nAnalyzing {asset}...")
         asset_df = raw_data[asset].dropna()
         prediction, probability = get_ml_prediction(asset_df)

@@ -61,6 +61,9 @@ async def get_signal():
     for name, ticker in symbols.items():
         print(f"Fetching latest data for {name}...")
         df = yf.download(ticker, period="60d", interval="1h", progress=False)
+        if df.empty or len(df) < 60:
+            print(f"⚠️ WARNING: Not enough data for {name}. Skipping strategy logic.")
+            continue
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
         raw_data[name] = df
@@ -254,17 +257,16 @@ async def get_signal():
                 else:
                     print(f"AI: {asset} position already open. Skipping.")
             else:
+                log_to_file(f"AI ({asset}): Confidence low ({probability*100:.1f}%). Threshold: {ML_CONFIDENCE_THRESHOLD*100}%. Waiting.")
                 print(f"AI ({asset}): Low confidence ({probability*100:.1f}%). Waiting.")
         else:
             print(f"AI ({asset}): Not enough data or prediction failed.")
-        else:
-            log_to_file(f"AI: Confidence low ({probability*100:.1f}%)")
-            print("RECOMMENDATION: WAIT (Low confidence)")
-    else:
-        log_to_file("AI: Not enough data")
-        print("Not enough data for ML Predictor.")
-        
-    print("\n========================================")
+    
+    # --- SESSION CLEANUP ---
+    mt5.shutdown()
+    print("\n" + "="*40)
+    print("SESSION COMPLETE - Connection Closed")
+    print("="*40)
 
 if __name__ == "__main__":
     asyncio.run(get_signal())

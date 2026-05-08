@@ -72,10 +72,10 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
     else:
         order_type = mt5.ORDER_TYPE_BUY if action == 'BUY' else mt5.ORDER_TYPE_SELL
     
-    # 5. Handle SL/TP (Smart vs Emergency)
-    # If SL/TP not provided (Pairs), use 50-pip backup
+    # 5. Handle SL/TP (Smart vs Emergency Backup)
     if action != 'EXIT':
         if sl is None or tp is None:
+            # Universal 50-pip safety net if no target is provided
             pip_size = 0.01 if "JPY" in symbol else 0.0001
             sl_dist = 50 * pip_size
             tp_dist = 50 * pip_size
@@ -88,15 +88,15 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
-        "volume": float(volume) if action != 'EXIT' else strategy_pos.volume,
-        "type": order_type,
-        "price": price,
+        "volume": float(volume) if action != 'EXIT' else float(strategy_pos.volume),
+        "type": int(order_type),
+        "price": float(price),
         "sl": round(float(sl), symbol_info.digits) if sl else 0.0,
         "tp": round(float(tp), symbol_info.digits) if tp else 0.0,
-        "magic": magic,
+        "magic": int(magic),
         "comment": f"{strategy_name} Trade",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": filling_type,
+        "type_filling": int(filling_type),
     }
 
     if action == 'EXIT' and strategy_pos:

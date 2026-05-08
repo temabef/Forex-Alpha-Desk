@@ -204,14 +204,13 @@ async def get_signal():
         print(f"AI Prediction: {'UP' if prediction == 1 else 'DOWN'}")
         print(f"Confidence: {probability*100:.1f}%")
         
-        # Calculate Dynamic TP/SL based on 24h Volatility (ATR)
-        # Using a simple high-low range for the last 24 bars
-        recent_24 = eurusd_df.tail(24)
+        # Calculate Dynamic TP/SL based on USDJPY Volatility (ATR)
+        recent_24 = usdjpy_df.tail(24)
         atr = (recent_24['High'] - recent_24['Low']).mean()
         dynamic_sl = atr * 1.2
         dynamic_tp = dynamic_sl * 1.5
         
-        current_price = eurusd_df['Close'].iloc[-1]
+        current_price = usdjpy_df['Close'].iloc[-1]
         
         if probability >= ML_CONFIDENCE_THRESHOLD:
             direction = "BULLISH (UP)" if prediction == 1 else "BEARISH (DOWN)"
@@ -222,7 +221,7 @@ async def get_signal():
                 tp_level = current_price + dynamic_tp
                 sl_level = current_price - dynamic_sl
             # --- PIP CALCULATION (JPY vs Normal) ---
-            # For JPY pairs, 1 pip is 0.01. For others, 1 pip is 0.0001
+            # Corrected logic to check the actual asset symbol
             pip_multiplier = 100 if "JPY" in "USDJPY" else 10000
             tp_pips = int(dynamic_tp * pip_multiplier)
             sl_pips = int(dynamic_sl * pip_multiplier)

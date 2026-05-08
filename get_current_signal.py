@@ -48,11 +48,10 @@ async def get_signal():
     log_to_file("--- Multi-Strategy Live Signal Report ---")
     log_to_file(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    # Fetch active positions to gate signals (from MT5)
-    active_positions = get_mt5_active_positions()
-    print(f"INFO: MT5 Active positions: {active_positions}")
-    
-    symbols = {"EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X"}
+    # --- SYMBOL CONFIG ---
+    # Added USDJPY for the AI Strategy
+    symbols = {"EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X"}
+    raw_data = {}
     raw_data = {}
 
     # Fetch recent data (60 days for ML training)
@@ -66,6 +65,10 @@ async def get_signal():
     print("\n" + "="*40)
     print("STRATEGY 1: PAIRS TRADING (Mean Reversion)")
     print("="*40)
+    
+    # --- CHECK ACTIVE POSITIONS FOR PAIRS ---
+    active_positions = get_mt5_active_positions(strategy_name='Pairs')
+    print(f"INFO: MT5 Active positions for Pairs: {active_positions}")
     
     df_combined = pd.concat([raw_data["EURUSD"]["Close"], raw_data["GBPUSD"]["Close"]], axis=1).dropna()
     df_combined.columns = ["EURUSD", "GBPUSD"]
@@ -91,27 +94,38 @@ async def get_signal():
         print(f"Current Z-Score: {z_score:.2f}")
         
         if z_score > ENTRY_THRESHOLD:
-            msg = f"🚨 *SIGNAL: SELL SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: SELL EURUSD, BUY GBPUSD"
-            log_to_file("Pairs: SELL SPREAD Signal Sent")
-            await send_telegram_msg(msg)
-            execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=0.2)
-            execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=0.2)
+            # Only send SELL signal if we DON'T have a position (Case-Insensitive check)
+            if not any(pos.upper() == "EURUSD" for pos in active_positions):
+                msg = f"🚨 *SIGNAL: SELL SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: SELL EURUSD, BUY GBPUSD"
+                log_to_file(f"Pairs: SELL SPREAD Signal Sent (Z-Score: {z_score:.2f})")
+                await send_telegram_msg(msg)
+                execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=0.2)
+                execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=0.2)
+            else:
+                log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
+                print("Pairs: Already in trade, suppressing duplicate SELL alert.")
         elif z_score < -ENTRY_THRESHOLD:
-            msg = f"🚀 *SIGNAL: BUY SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: BUY EURUSD, SELL GBPUSD"
-            log_to_file("Pairs: BUY SPREAD Signal Sent")
-            await send_telegram_msg(msg)
-            execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=0.2)
-            execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=0.2)
+            # Only send BUY signal if we DON'T have a position
+            if not any(pos.upper() == "EURUSD" for pos in active_positions):
+                msg = f"🚀 *SIGNAL: BUY SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: BUY EURUSD, SELL GBPUSD"
+                log_to_file(f"Pairs: BUY SPREAD Signal Sent (Z-Score: {z_score:.2f})")
+                await send_telegram_msg(msg)
+                execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=0.2)
+                execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=0.2)
+            else:
+                log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
+                print("Pairs: Already in trade, suppressing duplicate BUY alert.")
         elif abs(z_score) < EXIT_THRESHOLD:
-            # Only send EXIT signal if we actually have a position!
-            if "EURUSD" in active_positions or "GBPUSD" in active_positions:
+            # Only send EXIT signal if we actually have a position! (Case-Insensitive)
+            if any(pos.upper() in ["EURUSD", "GBPUSD"] for pos in active_positions):
                 msg = f"✅ *TARGET REACHED / EXIT*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\n\nAction: CLOSE both Pair positions."
                 print("RECOMMENDATION: EXIT (Target Reached)")
-                log_to_file("Pairs: TARGET REACHED / EXIT Signal Sent")
+                log_to_file(f"Pairs: TARGET REACHED / EXIT Signal Sent (Z-Score: {z_score:.2f})")
                 await send_telegram_msg(msg)
                 execute_mt5_trade('Pairs', 'EXIT', symbol='EURUSD')
                 execute_mt5_trade('Pairs', 'EXIT', symbol='GBPUSD')
             else:
+                log_to_file(f"Pairs: Z-Score={z_score:.2f} (Target reached but no active position)")
                 print("Pairs: Target reached but no active position found. Skipping alert.")
         else:
             log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT)")
@@ -122,6 +136,10 @@ async def get_signal():
     print("="*40)
     
     eurusd_df = raw_data["EURUSD"].dropna()
+    
+    # --- CHECK ACTIVE POSITIONS FOR TREND ---
+    active_positions = get_mt5_active_positions(strategy_name='Trend')
+    print(f"INFO: MT5 Active positions for Trend: {active_positions}")
     entry_lookback = 400
     exit_lookback = 200 
     
@@ -145,19 +163,27 @@ async def get_signal():
         print(f"Close: {current_close:.5f} | Upper: {upper_channel:.5f} | Lower: {lower_channel:.5f}")
         
         if current_close > upper_channel:
-            sl_price = lower_channel
-            tp_price = current_close + ((current_close - sl_price) * 2.0)
-            trend_report = f"📈 *SIGNAL: BREAKOUT LONG*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
-            log_to_file(f"Trend: BREAKOUT LONG Signal Sent (Price: {current_close:.5f})")
-            await send_telegram_msg(trend_report)
-            execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=0.2)
+            # Case-Insensitive check
+            if not any(pos.upper() == "EURUSD" for pos in active_positions):
+                sl_price = lower_channel
+                tp_price = current_close + ((current_close - sl_price) * 2.0)
+                trend_report = f"📈 *SIGNAL: BREAKOUT LONG*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
+                log_to_file(f"Trend: BREAKOUT LONG Signal Sent (Price: {current_close:.5f})")
+                await send_telegram_msg(trend_report)
+                execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=0.2)
+            else:
+                print("Trend: Breakout detected but Trend position already open. Skipping.")
         elif current_close < lower_channel:
-            sl_price = upper_channel
-            tp_price = current_close - ((sl_price - current_close) * 2.0)
-            trend_report = f"🔴 *SIGNAL: BREAKOUT SHORT*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
-            log_to_file(f"Trend: BREAKOUT SHORT Signal Sent (Price: {current_close:.5f})")
-            await send_telegram_msg(trend_report)
-            execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=0.2)
+            # Case-Insensitive check
+            if not any(pos.upper() == "EURUSD" for pos in active_positions):
+                sl_price = upper_channel
+                tp_price = current_close - ((sl_price - current_close) * 2.0)
+                trend_report = f"🔴 *SIGNAL: BREAKOUT SHORT*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
+                log_to_file(f"Trend: BREAKOUT SHORT Signal Sent (Price: {current_close:.5f})")
+                await send_telegram_msg(trend_report)
+                execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=0.2)
+            else:
+                print("Trend: Breakout detected but Trend position already open. Skipping.")
         elif current_close < exit_lower or current_close > exit_upper:
             trend_report = f"🛑 *TREND EXIT ALERT*\nClose: `{current_close:.5f}`\nAction: Consider CLOSING Trend trades."
             log_to_file("Trend: EXIT ALERT Sent")
@@ -168,10 +194,11 @@ async def get_signal():
             print("RECOMMENDATION: WAIT (Inside channel)")
 
     print("\n" + "="*40)
-    print("STRATEGY 3: QUANT PREDICTOR (Machine Learning)")
+    print("STRATEGY 3: QUANT PREDICTOR (USDJPY AI)")
     print("="*40)
     
-    prediction, probability = get_ml_prediction(eurusd_df)
+    usdjpy_df = raw_data["USDJPY"].dropna()
+    prediction, probability = get_ml_prediction(usdjpy_df)
     
     if prediction is not None:
         print(f"AI Prediction: {'UP' if prediction == 1 else 'DOWN'}")
@@ -194,25 +221,35 @@ async def get_signal():
             if prediction == 1: # UP
                 tp_level = current_price + dynamic_tp
                 sl_level = current_price - dynamic_sl
-            else: # DOWN
-                tp_level = current_price - dynamic_tp
-                sl_level = current_price + dynamic_sl
-                
-            ml_report = (
-                f"{icon} *Quant Predictor (Adaptive AI)*\n"
-                f"Asset: EURUSD\n"
-                f"Prediction: *{direction}*\n"
-                f"Confidence: `{probability*100:.1f}%`\n"
-                f"Price: `{current_price:.5f}`\n\n"
-                f"🎯 *Adaptive Targets:* \n"
-                f"TP: `{tp_level:.5f}` (~{dynamic_tp*10000:.0f} pips)\n"
-                f"SL: `{sl_level:.5f}` (~{dynamic_sl*10000:.0f} pips)\n\n"
-                f"Action: Consider entering {'Long' if prediction == 1 else 'Short'}"
-            )
-            log_to_file(f"AI: Signal Sent ({direction}, Confidence: {probability*100:.1f}%) - Dynamic TP: {dynamic_tp*10000:.0f} pips")
-            await send_telegram_msg(ml_report)
-            # MT5 handles SL/TP in Pips automatically
-            execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol='EURUSD', volume=0.2)
+            # --- PIP CALCULATION (JPY vs Normal) ---
+            # For JPY pairs, 1 pip is 0.01. For others, 1 pip is 0.0001
+            pip_multiplier = 100 if "JPY" in "USDJPY" else 10000
+            tp_pips = int(dynamic_tp * pip_multiplier)
+            sl_pips = int(dynamic_sl * pip_multiplier)
+
+            # --- CHECK ACTIVE POSITIONS FOR THIS STRATEGY ---
+            active_positions = get_mt5_active_positions(strategy_name='AI')
+            
+            # Case-Insensitive check to see if we already have a USDJPY trade
+            if not any(pos.upper() == "USDJPY" for pos in active_positions):
+                ml_report = (
+                    f"{icon} *Quant Predictor (Adaptive AI)*\n"
+                    f"Asset: `USDJPY`\n"
+                    f"Prediction: `{direction}`\n"
+                    f"Confidence: `{probability*100:.1f}%`\n"
+                    f"Price: `{current_price:.2f}`\n\n"
+                    f"🎯 *Adaptive Targets:* \n"
+                    f"TP: `{tp_level:.2f}` (~{tp_pips} pips)\n"
+                    f"SL: `{sl_level:.2f}` (~{sl_pips} pips)\n\n"
+                    f"Action: Consider entering {'Long' if prediction == 1 else 'Short'}"
+                )
+                log_to_file(f"AI: Signal Sent (USDJPY {direction}, Confidence: {probability*100:.1f}%)")
+                await send_telegram_msg(ml_report)
+                # Volume 0.2 for USDJPY
+                execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol='USDJPY', volume=0.2)
+            else:
+                log_to_file(f"AI: Confidence high ({probability*100:.1f}%) but USDJPY position already open. Skipping.")
+                print("AI: Signal detected but USDJPY position already open. Skipping.")
         else:
             log_to_file(f"AI: Confidence low ({probability*100:.1f}%)")
             print("RECOMMENDATION: WAIT (Low confidence)")

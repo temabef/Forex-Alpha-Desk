@@ -9,6 +9,7 @@ from ml_predictor_strategy import get_ml_prediction
 from mt5_executor import execute_mt5_trade, get_mt5_active_positions
 import os
 from dotenv import load_dotenv
+import MetaTrader5 as mt5
 
 # Load secrets from .env file
 load_dotenv()

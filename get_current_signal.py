@@ -76,66 +76,70 @@ async def get_signal():
     active_positions = get_mt5_active_positions(strategy_name='Pairs')
     print(f"INFO: MT5 Active positions for Pairs: {active_positions}")
     
-    df_combined = pd.concat([raw_data["EURUSD"]["Close"], raw_data["GBPUSD"]["Close"]], axis=1).dropna()
-    df_combined.columns = ["EURUSD", "GBPUSD"]
-    
-    lookback_pairs = 60 
-    if len(df_combined) >= lookback_pairs:
-        recent = df_combined.tail(lookback_pairs)
-        y = recent["EURUSD"].values
-        x = sm.add_constant(recent["GBPUSD"].values)
-        model = sm.OLS(y, x).fit()
+    # --- SAFETY CHECK: Ensure both symbols exist in raw_data ---
+    if "EURUSD" not in raw_data or "GBPUSD" not in raw_data:
+        print("⚠️ SKIPPING Strategy 1 (Pairs): Missing data for EURUSD or GBPUSD.")
+    else:
+        df_combined = pd.concat([raw_data["EURUSD"]["Close"], raw_data["GBPUSD"]["Close"]], axis=1).dropna()
+        df_combined.columns = ["EURUSD", "GBPUSD"]
         
-        intercept = model.params[0]
-        gamma = model.params[1]
-        
-        spreads = y - (gamma * recent["GBPUSD"].values + intercept)
-        current_spread = spreads[-1]
-        mean_spread = np.mean(spreads)
-        std_spread = np.std(spreads)
-        z_score = (current_spread - mean_spread) / std_spread
-        eur_price = recent['EURUSD'].iloc[-1]
-        gbp_price = recent['GBPUSD'].iloc[-1]
+        lookback_pairs = 60 
+        if len(df_combined) >= lookback_pairs:
+            recent = df_combined.tail(lookback_pairs)
+            y = recent["EURUSD"].values
+            x = sm.add_constant(recent["GBPUSD"].values)
+            model = sm.OLS(y, x).fit()
+            
+            intercept = model.params[0]
+            gamma = model.params[1]
+            
+            spreads = y - (gamma * recent["GBPUSD"].values + intercept)
+            current_spread = spreads[-1]
+            mean_spread = np.mean(spreads)
+            std_spread = np.std(spreads)
+            z_score = (current_spread - mean_spread) / std_spread
+            eur_price = recent['EURUSD'].iloc[-1]
+            gbp_price = recent['GBPUSD'].iloc[-1]
 
-        print(f"Current Z-Score: {z_score:.2f}")
-        
-        if z_score > ENTRY_THRESHOLD:
-            # Only send SELL signal if we DON'T have a position (Case-Insensitive check)
-            if not any(pos.upper() == "EURUSD" for pos in active_positions):
-                msg = f"🚨 *SIGNAL: SELL SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: SELL EURUSD, BUY GBPUSD"
-                log_to_file(f"Pairs: SELL SPREAD Signal Sent (Z-Score: {z_score:.2f})")
-                await send_telegram_msg(msg)
-                execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
-                execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
+            print(f"Current Z-Score: {z_score:.2f}")
+            
+            if z_score > ENTRY_THRESHOLD:
+                # Only send SELL signal if we DON'T have a position (Case-Insensitive check)
+                if not any(pos.upper() == "EURUSD" for pos in active_positions):
+                    msg = f"🚨 *SIGNAL: SELL SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: SELL EURUSD, BUY GBPUSD"
+                    log_to_file(f"Pairs: SELL SPREAD Signal Sent (Z-Score: {z_score:.2f})")
+                    await send_telegram_msg(msg)
+                    execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
+                    execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
+                else:
+                    log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
+                    print("Pairs: Already in trade, suppressing duplicate SELL alert.")
+            elif z_score < -ENTRY_THRESHOLD:
+                # Only send BUY signal if we DON'T have a position
+                if not any(pos.upper() == "EURUSD" for pos in active_positions):
+                    msg = f"🚀 *SIGNAL: BUY SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: BUY EURUSD, SELL GBPUSD"
+                    log_to_file(f"Pairs: BUY SPREAD Signal Sent (Z-Score: {z_score:.2f})")
+                    await send_telegram_msg(msg)
+                    execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
+                    execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
+                else:
+                    log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
+                    print("Pairs: Already in trade, suppressing duplicate BUY alert.")
+            elif abs(z_score) < EXIT_THRESHOLD:
+                # Only send EXIT signal if we actually have a position! (Case-Insensitive)
+                if any(pos.upper() in ["EURUSD", "GBPUSD"] for pos in active_positions):
+                    msg = f"✅ *TARGET REACHED / EXIT*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\n\nAction: CLOSE both Pair positions."
+                    print("RECOMMENDATION: EXIT (Target Reached)")
+                    log_to_file(f"Pairs: TARGET REACHED / EXIT Signal Sent (Z-Score: {z_score:.2f})")
+                    await send_telegram_msg(msg)
+                    execute_mt5_trade('Pairs', 'EXIT', symbol='EURUSD')
+                    execute_mt5_trade('Pairs', 'EXIT', symbol='GBPUSD')
+                else:
+                    log_to_file(f"Pairs: Z-Score={z_score:.2f} (Target reached but no active position)")
+                    print("Pairs: Target reached but no active position found. Skipping alert.")
             else:
-                log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
-                print("Pairs: Already in trade, suppressing duplicate SELL alert.")
-        elif z_score < -ENTRY_THRESHOLD:
-            # Only send BUY signal if we DON'T have a position
-            if not any(pos.upper() == "EURUSD" for pos in active_positions):
-                msg = f"🚀 *SIGNAL: BUY SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: BUY EURUSD, SELL GBPUSD"
-                log_to_file(f"Pairs: BUY SPREAD Signal Sent (Z-Score: {z_score:.2f})")
-                await send_telegram_msg(msg)
-                execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
-                execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
-            else:
-                log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
-                print("Pairs: Already in trade, suppressing duplicate BUY alert.")
-        elif abs(z_score) < EXIT_THRESHOLD:
-            # Only send EXIT signal if we actually have a position! (Case-Insensitive)
-            if any(pos.upper() in ["EURUSD", "GBPUSD"] for pos in active_positions):
-                msg = f"✅ *TARGET REACHED / EXIT*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\n\nAction: CLOSE both Pair positions."
-                print("RECOMMENDATION: EXIT (Target Reached)")
-                log_to_file(f"Pairs: TARGET REACHED / EXIT Signal Sent (Z-Score: {z_score:.2f})")
-                await send_telegram_msg(msg)
-                execute_mt5_trade('Pairs', 'EXIT', symbol='EURUSD')
-                execute_mt5_trade('Pairs', 'EXIT', symbol='GBPUSD')
-            else:
-                log_to_file(f"Pairs: Z-Score={z_score:.2f} (Target reached but no active position)")
-                print("Pairs: Target reached but no active position found. Skipping alert.")
-        else:
-            log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT)")
-            print("RECOMMENDATION: WAIT (No signal)")
+                log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT)")
+                print("RECOMMENDATION: WAIT (No signal)")
 
     print("\n" + "="*40)
     print("STRATEGY 2: DONCHIAN BREAKOUT (Trend)")

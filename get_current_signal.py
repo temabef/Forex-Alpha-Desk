@@ -194,61 +194,66 @@ async def get_signal():
             print("RECOMMENDATION: WAIT (Inside channel)")
 
     print("\n" + "="*40)
-    print("STRATEGY 3: QUANT PREDICTOR (USDJPY AI)")
+    print("STRATEGY 3: QUANT PREDICTOR (Multi-Pair AI)")
     print("="*40)
     
-    usdjpy_df = raw_data["USDJPY"].dropna()
-    prediction, probability = get_ml_prediction(usdjpy_df)
-    
-    if prediction is not None:
-        print(f"AI Prediction: {'UP' if prediction == 1 else 'DOWN'}")
-        print(f"Confidence: {probability*100:.1f}%")
+    for asset in ["EURUSD", "USDJPY"]:
+        print(f"\nAnalyzing {asset}...")
+        asset_df = raw_data[asset].dropna()
+        prediction, probability = get_ml_prediction(asset_df)
         
-        # Calculate Dynamic TP/SL based on USDJPY Volatility (ATR)
-        recent_24 = usdjpy_df.tail(24)
-        atr = (recent_24['High'] - recent_24['Low']).mean()
-        dynamic_sl = atr * 1.2
-        dynamic_tp = dynamic_sl * 1.5
-        
-        current_price = usdjpy_df['Close'].iloc[-1]
-        
-        if probability >= ML_CONFIDENCE_THRESHOLD:
-            direction = "BULLISH (UP)" if prediction == 1 else "BEARISH (DOWN)"
-            icon = "🧠"
+        if prediction is not None:
+            print(f"AI Prediction for {asset}: {'UP' if prediction == 1 else 'DOWN'}")
+            print(f"Confidence: {probability*100:.1f}%")
             
-            # Calculate actual price levels
-            if prediction == 1: # UP
-                tp_level = current_price + dynamic_tp
-                sl_level = current_price - dynamic_sl
-            # --- PIP CALCULATION (JPY vs Normal) ---
-            # Corrected logic to check the actual asset symbol
-            pip_multiplier = 100 if "JPY" in "USDJPY" else 10000
-            tp_pips = int(dynamic_tp * pip_multiplier)
-            sl_pips = int(dynamic_sl * pip_multiplier)
+            # Calculate Dynamic TP/SL based on Asset Volatility (ATR)
+            recent_24 = asset_df.tail(24)
+            atr = (recent_24['High'] - recent_24['Low']).mean()
+            dynamic_sl = atr * 1.2
+            dynamic_tp = dynamic_sl * 1.5
+            current_price = asset_df['Close'].iloc[-1]
+            
+            if probability >= ML_CONFIDENCE_THRESHOLD:
+                direction = "BULLISH (UP)" if prediction == 1 else "BEARISH (DOWN)"
+                icon = "🚀" if prediction == 1 else "📉"
+                
+                if prediction == 1: # UP
+                    tp_level = current_price + dynamic_tp
+                    sl_level = current_price - dynamic_sl
+                else: # DOWN
+                    tp_level = current_price - dynamic_tp
+                    sl_level = current_price + dynamic_sl
+                    
+                # --- PIP CALCULATION (JPY vs Normal) ---
+                pip_multiplier = 100 if "JPY" in asset else 10000
+                tp_pips = int(dynamic_tp * pip_multiplier)
+                sl_pips = int(dynamic_sl * pip_multiplier)
 
-            # --- CHECK ACTIVE POSITIONS FOR THIS STRATEGY ---
-            active_positions = get_mt5_active_positions(strategy_name='AI')
-            
-            # Case-Insensitive check to see if we already have a USDJPY trade
-            if not any(pos.upper() == "USDJPY" for pos in active_positions):
-                ml_report = (
-                    f"{icon} *Quant Predictor (Adaptive AI)*\n"
-                    f"Asset: `USDJPY`\n"
-                    f"Prediction: `{direction}`\n"
-                    f"Confidence: `{probability*100:.1f}%`\n"
-                    f"Price: `{current_price:.2f}`\n\n"
-                    f"🎯 *Adaptive Targets:* \n"
-                    f"TP: `{tp_level:.2f}` (~{tp_pips} pips)\n"
-                    f"SL: `{sl_level:.2f}` (~{sl_pips} pips)\n\n"
-                    f"Action: Consider entering {'Long' if prediction == 1 else 'Short'}"
-                )
-                log_to_file(f"AI: Signal Sent (USDJPY {direction}, Confidence: {probability*100:.1f}%)")
-                await send_telegram_msg(ml_report)
-                # Volume 0.2 for USDJPY
-                execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol='USDJPY', volume=0.2)
+                # --- CHECK ACTIVE POSITIONS FOR THIS STRATEGY ---
+                active_positions = get_mt5_active_positions(strategy_name='AI')
+                
+                if not any(pos.upper() == asset.upper() for pos in active_positions):
+                    ml_report = (
+                        f"{icon} *Quant Predictor (Adaptive AI)*\n"
+                        f"Asset: `{asset}`\n"
+                        f"Prediction: `{direction}`\n"
+                        f"Confidence: `{probability*100:.1f}%`\n"
+                        f"Price: `{current_price:.5f if 'JPY' not in asset else '.2f'}`\n\n"
+                        f"🎯 *Adaptive Targets:* \n"
+                        f"TP: `{tp_level:.5f if 'JPY' not in asset else '.2f'}` (~{tp_pips} pips)\n"
+                        f"SL: `{sl_level:.5f if 'JPY' not in asset else '.2f'}` (~{sl_pips} pips)\n\n"
+                        f"Action: Entering {'Long' if prediction == 1 else 'Short'}"
+                    )
+                    log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
+                    await send_telegram_msg(ml_report)
+                    # Safe volume for $5k Prop Account
+                    execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=0.05)
+                else:
+                    print(f"AI: {asset} position already open. Skipping.")
             else:
-                log_to_file(f"AI: Confidence high ({probability*100:.1f}%) but USDJPY position already open. Skipping.")
-                print("AI: Signal detected but USDJPY position already open. Skipping.")
+                print(f"AI ({asset}): Low confidence ({probability*100:.1f}%). Waiting.")
+        else:
+            print(f"AI ({asset}): Not enough data or prediction failed.")
         else:
             log_to_file(f"AI: Confidence low ({probability*100:.1f}%)")
             print("RECOMMENDATION: WAIT (Low confidence)")

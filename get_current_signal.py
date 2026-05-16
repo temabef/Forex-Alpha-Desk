@@ -1,14 +1,19 @@
+import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
 import asyncio
 from telegram import Bot
-from datetime import datetime
-from ml_predictor_strategy import get_ml_prediction
-from mt5_executor import execute_mt5_trade, get_mt5_active_positions
+from datetime import datetime, timezone
+from mt5_executor import execute_mt5_trade, get_mt5_active_positions, close_all_active_positions
 import os
+import json
 from dotenv import load_dotenv
 import MetaTrader5 as mt5
+from news_manager import is_in_danger_zone
 
 # Load secrets from .env file
 load_dotenv()
@@ -68,12 +73,114 @@ def fetch_mt5_data(symbol, num_bars=1500):
     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
     return df
 
+def check_daily_drawdown():
+    """
+    Checks if the account has hit the daily drawdown limit.
+    """
+    max_drawdown_pct = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", 0.035))
+    lock_file = "logs/daily_lock.txt"
+    balance_file = "logs/daily_start_balance.json"
+    
+    # 1. Check if we are already locked out for today
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(lock_file):
+        with open(lock_file, "r") as f:
+            lock_date = f.read().strip()
+            if lock_date == today_str:
+                return True, "Account is locked due to daily drawdown breach."
+
+    # 2. Initialize MT5
+    terminal_path = os.getenv("MT5_TERMINAL_PATH")
+    if not mt5.initialize(path=terminal_path):
+        return False, "MT5 Init Failed"
+
+    account_info = mt5.account_info()
+    if not account_info:
+        return False, "Could not fetch account info"
+
+    # 3. Manage Daily Starting Balance
+    start_balance = account_info.balance
+    if os.path.exists(balance_file):
+        try:
+            with open(balance_file, "r") as f:
+                data = json.load(f)
+                if data.get("date") == today_str:
+                    start_balance = data.get("balance")
+                else:
+                    # New Day - Update balance
+                    with open(balance_file, "w") as fw:
+                        json.dump({"date": today_str, "balance": account_info.balance}, fw)
+        except:
+            # Fallback if file is corrupted
+            with open(balance_file, "w") as fw:
+                json.dump({"date": today_str, "balance": account_info.balance}, fw)
+    else:
+        # First Run ever
+        with open(balance_file, "w") as fw:
+            json.dump({"date": today_str, "balance": account_info.balance}, fw)
+
+    # 4. Calculate Drawdown
+    current_equity = account_info.equity
+    drawdown_pct = (start_balance - current_equity) / start_balance
+    
+    if drawdown_pct >= max_drawdown_pct:
+        # BREACH DETECTED
+        with open(lock_file, "w") as f:
+            f.write(today_str)
+        return True, f"DAILY DRAWDOWN BREACH: {drawdown_pct*100:.2f}% (Limit: {max_drawdown_pct*100:.2f}%). Closing all trades."
+
+    return False, ""
+
+def is_friday_night():
+    """
+    Checks if it's Friday after 20:00 GMT.
+    """
+    if os.getenv("ENABLE_FRIDAY_EXIT", "True") != "True":
+        return False
+        
+    now_utc = datetime.now(timezone.utc)
+    # Friday = 4
+    if now_utc.weekday() == 4 and now_utc.hour >= 20:
+        return True
+    return False
+
 async def get_signal():
+    # Defer heavy imports to save RAM on startup
+    import statsmodels.api as sm
+    from ml_predictor_strategy import get_ml_prediction
+    
     print(f"--- Multi-Strategy Live Signal Report ---")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
     log_to_file("--- Multi-Strategy Live Signal Report ---")
     log_to_file(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    # --- SHIELD 1: DAILY DRAWDOWN KILL-SWITCH ---
+    is_breached, breach_msg = check_daily_drawdown()
+    if is_breached:
+        print(f"🛑 {breach_msg}")
+        log_to_file(f"KILL-SWITCH: {breach_msg}")
+        await send_telegram_msg(f"🛑 *EMERGENCY KILL-SWITCH*\n{breach_msg}")
+        close_all_active_positions()
+        return
+
+    # --- SHIELD 2: FRIDAY MARKET CLOSE ---
+    if is_friday_night():
+        print("📅 Friday 20:00 GMT Reached. Closing all positions for the weekend.")
+        log_to_file("FRIDAY EXIT: Closing all positions.")
+        await send_telegram_msg("📅 *FRIDAY EXIT*\nClosing all positions for the weekend. See you Sunday night!")
+        close_all_active_positions()
+        return
+
+    # --- SHIELD 3: HIGH-IMPACT NEWS FILTER ---
+    in_danger, news_msg = is_in_danger_zone()
+    if in_danger:
+        print(f"⚠️ {news_msg}")
+        log_to_file(f"NEWS FILTER: {news_msg}")
+        # We don't exit the script, but we will pass a flag to strategies to skip ENTRIES
+        # Actually, for prop firm safety, let's just skip the entire execution this hour
+        await send_telegram_msg(f"⚠️ *NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
+        return
 
     # --- SYMBOL CONFIG ---
     symbols = ["EURUSD", "GBPUSD", "USDJPY"]
@@ -267,15 +374,17 @@ async def get_signal():
                 active_positions = get_mt5_active_positions(strategy_name='AI')
                 
                 if not any(pos.upper() == asset.upper() for pos in active_positions):
+                    # Format based on JPY
+                    p_fmt = ".2f" if "JPY" in asset else ".5f"
                     ml_report = (
                         f"{icon} *Quant Predictor (Adaptive AI)*\n"
                         f"Asset: `{asset}`\n"
                         f"Prediction: `{direction}`\n"
                         f"Confidence: `{probability*100:.1f}%`\n"
-                        f"Price: `{current_price:.5f if 'JPY' not in asset else '.2f'}`\n\n"
+                        f"Price: `{current_price:{p_fmt}}`\n\n"
                         f"🎯 *Adaptive Targets:* \n"
-                        f"TP: `{tp_level:.5f if 'JPY' not in asset else '.2f'}` (~{tp_pips} pips)\n"
-                        f"SL: `{sl_level:.5f if 'JPY' not in asset else '.2f'}` (~{sl_pips} pips)\n\n"
+                        f"TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
+                        f"SL: `{sl_level:{p_fmt}}` (~{sl_pips} pips)\n\n"
                         f"Action: Entering {'Long' if prediction == 1 else 'Short'}"
                     )
                     log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")

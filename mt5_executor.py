@@ -79,10 +79,10 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
     # 5. Handle SL/TP (Smart vs Emergency Backup)
     if action != 'EXIT':
         if sl is None or tp is None:
-            # Universal 50-pip safety net if no target is provided
+            # Safety targets
             pip_size = 0.01 if "JPY" in symbol else 0.0001
-            sl_dist = 50 * pip_size
-            tp_dist = 50 * pip_size
+            sl_dist = 150 * pip_size
+            tp_dist = 40 * pip_size
             sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
             tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
     else:
@@ -113,6 +113,36 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
         print(f"MT5 Order Failed: {result.comment if result else 'Unknown'}")
         return False
 
+    # --- CRITICAL FIX: ENSURE SL/TP ARE APPLIED (Two-Step for Prop Brokers) ---
+    if action != 'EXIT' and (sl or tp):
+        # We wait a split second for the position to be recognized
+        import time
+        time.sleep(0.1)
+        
+        # Get the ticket of the position we just opened
+        # We search by magic number to find the exact trade
+        positions = mt5.positions_get(symbol=broker_symbol)
+        new_pos = None
+        if positions:
+            for p in positions:
+                if p.magic == magic:
+                    new_pos = p
+                    break
+        
+        if new_pos:
+            modify_request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": broker_symbol,
+                "position": new_pos.ticket,
+                "sl": round(float(sl), symbol_info.digits) if sl else 0.0,
+                "tp": round(float(tp), symbol_info.digits) if tp else 0.0,
+            }
+            modify_result = mt5.order_send(modify_request)
+            if modify_result.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"⚠️ MT5: Failed to modify SL/TP safety net: {modify_result.comment}")
+            else:
+                print(f"✅ MT5: SL/TP Safety Net applied successfully to ticket {new_pos.ticket}")
+
     return True
 
 def get_mt5_active_positions(strategy_name=None):
@@ -137,3 +167,59 @@ def get_mt5_active_positions(strategy_name=None):
             active_symbols.append(clean_symbol)
             
     return active_symbols
+
+def close_all_active_positions():
+    """
+    Emergency/Global exit function. Closes every single open position 
+    on the account regardless of strategy.
+    """
+    if not mt5.initialize(path=TERMINAL_PATH):
+        print("MT5: Failed to initialize for global exit")
+        return False
+        
+    positions = mt5.positions_get()
+    if not positions:
+        print("MT5: No active positions found for global exit.")
+        return True
+        
+    print(f"MT5: Attempting to close {len(positions)} positions...")
+    success = True
+    for p in positions:
+        # Determine order type to close
+        order_type = mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        tick = mt5.symbol_info_tick(p.symbol)
+        if not tick:
+            continue
+        price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
+        
+        # Get symbol properties for digits and filling mode
+        symbol_info = mt5.symbol_info(p.symbol)
+        if symbol_info is None:
+            continue
+            
+        filling_type = mt5.ORDER_FILLING_FOK
+        if symbol_info.filling_mode & 1: filling_type = mt5.ORDER_FILLING_FOK
+        elif symbol_info.filling_mode & 2: filling_type = mt5.ORDER_FILLING_IOC
+        else: filling_type = mt5.ORDER_FILLING_RETURN
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": p.symbol,
+            "volume": float(p.volume),
+            "type": int(order_type),
+            "position": p.ticket,
+            "price": float(price),
+            "magic": int(p.magic),
+            "comment": "Global Exit",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": int(filling_type),
+        }
+        
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"Failed to close position {p.ticket}: {result.comment if result else 'Unknown'}")
+            success = False
+        else:
+            print(f"Successfully closed position {p.ticket} ({p.symbol})")
+            
+    return success

@@ -8,10 +8,10 @@ echo Folder: %BASE_DIR%
 echo Python: %PYTHON_EXE%
 
 :: Delete the old task if it exists
-schtasks /delete /tn "ForexPairsSignal" /f >nul 2>&1
+schtasks /delete /tn "Forex-Bot-5k" /f >nul 2>&1
 
 :: Create the new task with ABSOLUTE paths and EXPLICIT working directory
-schtasks /create /tn "ForexPairsSignal" /tr "'%PYTHON_EXE%' '%SCRIPT_PATH%'" /sc hourly /mo 1 /rl highest /f
+schtasks /create /tn "Forex-Bot-5k" /tr "'%PYTHON_EXE%' '%SCRIPT_PATH%'" /sc hourly /mo 1 /rl highest /f
 
 if %ERRORLEVEL% EQU 0 (
     echo.

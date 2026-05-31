@@ -26,7 +26,7 @@ os.chdir(script_dir)
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-# --- RISK CONFIGURATION (For $5k Prop Account) ---
+# --- RISK CONFIGURATION (For $10k Prop Account) ---
 ENTRY_THRESHOLD = 2.0
 EXIT_THRESHOLD = 0.2
 ML_CONFIDENCE_THRESHOLD = 0.62 
@@ -310,7 +310,12 @@ async def get_signal():
             # Case-Insensitive check
             if not any(pos.upper() == "EURUSD" for pos in active_positions):
                 sl_price = lower_channel
-                tp_price = current_close + ((current_close - sl_price) * 2.0)
+                max_sl_dist = 50 * 0.0001
+                if current_close - sl_price > max_sl_dist:
+                    sl_price = current_close - max_sl_dist
+                
+                tp_dist = 70 * 0.0001
+                tp_price = current_close + tp_dist
                 trend_report = f"📈 *SIGNAL: BREAKOUT LONG*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
                 log_to_file(f"Trend: BREAKOUT LONG Signal Sent (Price: {current_close:.5f})")
                 await send_telegram_msg(trend_report)
@@ -321,7 +326,12 @@ async def get_signal():
             # Case-Insensitive check
             if not any(pos.upper() == "EURUSD" for pos in active_positions):
                 sl_price = upper_channel
-                tp_price = current_close - ((sl_price - current_close) * 2.0)
+                max_sl_dist = 50 * 0.0001
+                if sl_price - current_close > max_sl_dist:
+                    sl_price = current_close + max_sl_dist
+                
+                tp_dist = 70 * 0.0001
+                tp_price = current_close - tp_dist
                 trend_report = f"🔴 *SIGNAL: BREAKOUT SHORT*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
                 log_to_file(f"Trend: BREAKOUT SHORT Signal Sent (Price: {current_close:.5f})")
                 await send_telegram_msg(trend_report)
@@ -341,45 +351,68 @@ async def get_signal():
     print("STRATEGY 3: QUANT PREDICTOR (Multi-Pair AI)")
     print("="*40)
     
-    for asset in ["EURUSD", "USDJPY"]:
-        if asset not in raw_data:
-            print(f"⚠️ SKIPPING AI analysis for {asset}: Missing data.")
-            continue
-            
-        print(f"\nAnalyzing {asset}...")
-        asset_df = raw_data[asset].dropna()
-        prediction, probability = get_ml_prediction(asset_df)
-        
-        if prediction is not None:
-            print(f"AI Prediction for {asset}: {'UP' if prediction == 1 else 'DOWN'}")
-            print(f"Confidence: {probability*100:.1f}%")
-            
-            # Calculate Dynamic TP/SL based on Asset Volatility (ATR)
-            recent_24 = asset_df.tail(24)
-            atr = (recent_24['High'] - recent_24['Low']).mean()
-            
-            # Increase ATR multiplier to give trades breathing room (3.5x ATR instead of 1.2x)
-            dynamic_sl = atr * 3.5
-            
-            # Enforce a minimum safety SL of 20 pips to avoid instant stop-outs during low-volatility hours
-            pip_size = 0.01 if "JPY" in asset else 0.0001
-            min_sl_dist = 20 * pip_size
-            if dynamic_sl < min_sl_dist:
-                dynamic_sl = min_sl_dist
+    current_utc_hour = datetime.utcnow().hour
+    if not (7 <= current_utc_hour <= 17):
+        print(f"⚠️ AI Strategy inactive outside London/NY hours (Current UTC hour: {current_utc_hour}).")
+        log_to_file(f"AI: Skipping execution, outside active session (hour {current_utc_hour})")
+    else:
+        for asset in ["EURUSD", "USDJPY"]:
+            if asset not in raw_data:
+                print(f"⚠️ SKIPPING AI analysis for {asset}: Missing data.")
+                continue
                 
-            dynamic_tp = dynamic_sl * 1.5
-            current_price = asset_df['Close'].iloc[-1]
+            print(f"\nAnalyzing {asset}...")
+            asset_df = raw_data[asset].dropna()
+            prediction, probability, est_win_rate = get_ml_prediction(asset_df)
             
-            if probability >= ML_CONFIDENCE_THRESHOLD:
-                direction = "BULLISH (UP)" if prediction == 1 else "BEARISH (DOWN)"
-                icon = "🚀" if prediction == 1 else "📉"
+            if prediction is not None:
+                print(f"AI Prediction for {asset}: {'UP' if prediction == 1 else 'DOWN'}")
+                print(f"Confidence: {probability*100:.1f}%")
+                print(f"Estimated Walk-Forward Win Rate: {est_win_rate*100:.1f}%")
                 
-                if prediction == 1: # UP
-                    tp_level = current_price + dynamic_tp
-                    sl_level = current_price - dynamic_sl
-                else: # DOWN
-                    tp_level = current_price - dynamic_tp
-                    sl_level = current_price + dynamic_sl
+                # Calculate Dynamic TP/SL based on Asset Volatility (ATR)
+                recent_24 = asset_df.tail(24)
+                atr = (recent_24['High'] - recent_24['Low']).mean()
+                
+                # Increase ATR multiplier to give trades breathing room (3.5x ATR instead of 1.2x)
+                dynamic_sl = atr * 3.5
+                
+                # Enforce a minimum safety SL of 20 pips to avoid instant stop-outs during low-volatility hours
+                pip_size = 0.01 if "JPY" in asset else 0.0001
+                min_sl_dist = 20 * pip_size
+                if dynamic_sl < min_sl_dist:
+                    dynamic_sl = min_sl_dist
+                    
+                dynamic_tp = dynamic_sl * 1.5
+                current_price = asset_df['Close'].iloc[-1]
+                
+                if probability >= ML_CONFIDENCE_THRESHOLD:
+                    if est_win_rate < 0.42:
+                        log_to_file(f"AI ({asset}): Estimated win rate too low ({est_win_rate*100:.1f}%). Threshold: 42%. Skipping.")
+                        print(f"AI ({asset}): Estimated win rate too low ({est_win_rate*100:.1f}%). Skipping.")
+                        continue
+                    
+                    direction = "BULLISH (UP)" if prediction == 1 else "BEARISH (DOWN)"
+                    
+                    # EMA-20 Confirmation
+                    ema_20 = asset_df['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
+                    if prediction == 1 and current_price < ema_20:
+                        log_to_file(f"AI ({asset}): Signal UP rejected: Price ({current_price:.5f}) < EMA-20 ({ema_20:.5f}).")
+                        print(f"AI ({asset}): Signal UP rejected (Price < EMA-20).")
+                        continue
+                    elif prediction == 0 and current_price > ema_20:
+                        log_to_file(f"AI ({asset}): Signal DOWN rejected: Price ({current_price:.5f}) > EMA-20 ({ema_20:.5f}).")
+                        print(f"AI ({asset}): Signal DOWN rejected (Price > EMA-20).")
+                        continue
+                        
+                    icon = "🚀" if prediction == 1 else "📉"
+                    
+                    if prediction == 1: # UP
+                        tp_level = current_price + dynamic_tp
+                        sl_level = current_price - dynamic_sl
+                    else: # DOWN
+                        tp_level = current_price - dynamic_tp
+                        sl_level = current_price + dynamic_sl
                     
                 # --- PIP CALCULATION (JPY vs Normal) ---
                 pip_multiplier = 100 if "JPY" in asset else 10000
@@ -405,7 +438,7 @@ async def get_signal():
                     )
                     log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
                     await send_telegram_msg(ml_report)
-                    # Safe volume for $5k Prop Account
+                    # Safe volume for $10k Prop Account
                     execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level)
                 else:
                     print(f"AI: {asset} position already open. Skipping.")

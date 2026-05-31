@@ -223,3 +223,80 @@ def close_all_active_positions():
             print(f"Successfully closed position {p.ticket} ({p.symbol})")
             
     return success
+
+def close_expired_ai_positions(max_age_seconds=14300):
+    """
+    Closes any AI position (magic number 111) that has been open for >= max_age_seconds (approx 4 hours).
+    Uses the broker server time to compute exact position duration.
+    """
+    magic = MAGIC_NUMBERS.get('AI', 111)
+    
+    if not mt5.initialize(path=TERMINAL_PATH):
+        print("MT5: Failed to initialize for checking expired positions.")
+        return False
+        
+    positions = mt5.positions_get()
+    if not positions:
+        return True
+        
+    suffix = os.getenv("SYMBOL_SUFFIX", "")
+    
+    # Fetch broker current time from ticks of EURUSD to avoid local time/server time mismatch
+    eurusd_broker_symbol = f"EURUSD{suffix}"
+    tick = mt5.symbol_info_tick(eurusd_broker_symbol)
+    if tick is None:
+        print("MT5: Failed to fetch symbol tick for time comparison. Skipping age check.")
+        return False
+        
+    current_time = tick.time
+    
+    for p in positions:
+        if p.magic == magic:
+            age = current_time - p.time
+            clean_symbol = p.symbol.replace(suffix, "") if suffix else p.symbol
+            print(f"AI Position check - Ticket {p.ticket} ({clean_symbol}): Age is {age}s (Threshold: {max_age_seconds}s)")
+            if age >= max_age_seconds:
+                print(f"AI Position {p.ticket} ({clean_symbol}) has expired (age: {age}s >= {max_age_seconds}s). Closing.")
+                
+                # Close the position using market order
+                order_type = mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                
+                # Get close tick
+                close_tick = mt5.symbol_info_tick(p.symbol)
+                if not close_tick:
+                    print(f"Failed to get price tick to close {p.symbol}")
+                    continue
+                    
+                price = close_tick.bid if order_type == mt5.ORDER_TYPE_SELL else close_tick.ask
+                symbol_info = mt5.symbol_info(p.symbol)
+                if symbol_info is None:
+                    continue
+                
+                price = round(price, symbol_info.digits)
+                
+                filling_type = mt5.ORDER_FILLING_FOK
+                if symbol_info.filling_mode & 1: filling_type = mt5.ORDER_FILLING_FOK
+                elif symbol_info.filling_mode & 2: filling_type = mt5.ORDER_FILLING_IOC
+                else: filling_type = mt5.ORDER_FILLING_RETURN
+                
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": p.symbol,
+                    "volume": float(p.volume),
+                    "type": int(order_type),
+                    "position": p.ticket,
+                    "price": float(price),
+                    "magic": int(p.magic),
+                    "comment": "AI Age Exit",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": int(filling_type),
+                }
+                
+                result = mt5.order_send(request)
+                if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+                    print(f"MT5 Order Failed on age exit: {result.comment if result else 'Unknown'}")
+                else:
+                    print(f"Successfully closed expired AI position {p.ticket} ({p.symbol})")
+                    
+    return True
+

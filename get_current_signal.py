@@ -29,7 +29,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # --- RISK CONFIGURATION (For $5k Prop Account) ---
 ENTRY_THRESHOLD = 2.0
 EXIT_THRESHOLD = 0.2
-ML_CONFIDENCE_THRESHOLD = 0.58 
+ML_CONFIDENCE_THRESHOLD = 0.62 
 LOT_SIZE_AI = float(os.getenv("LOT_SIZE_AI", 0.05))
 LOT_SIZE_PAIRS = float(os.getenv("LOT_SIZE_PAIRS", 0.02))
 LOT_SIZE_TREND = float(os.getenv("LOT_SIZE_TREND", 0.05))
@@ -181,6 +181,13 @@ async def get_signal():
         # Actually, for prop firm safety, let's just skip the entire execution this hour
         await send_telegram_msg(f"⚠️ *NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
         return
+
+    # --- SHIELD 4: AI TRADE EXPIRATION CLOSE (4-HOUR MAX HOLD) ---
+    try:
+        from mt5_executor import close_expired_ai_positions
+        close_expired_ai_positions()
+    except Exception as e:
+        print(f"⚠️ Error running expired AI close: {e}")
 
     # --- SYMBOL CONFIG ---
     symbols = ["EURUSD", "GBPUSD", "USDJPY"]
@@ -350,7 +357,16 @@ async def get_signal():
             # Calculate Dynamic TP/SL based on Asset Volatility (ATR)
             recent_24 = asset_df.tail(24)
             atr = (recent_24['High'] - recent_24['Low']).mean()
-            dynamic_sl = atr * 1.2
+            
+            # Increase ATR multiplier to give trades breathing room (3.5x ATR instead of 1.2x)
+            dynamic_sl = atr * 3.5
+            
+            # Enforce a minimum safety SL of 20 pips to avoid instant stop-outs during low-volatility hours
+            pip_size = 0.01 if "JPY" in asset else 0.0001
+            min_sl_dist = 20 * pip_size
+            if dynamic_sl < min_sl_dist:
+                dynamic_sl = min_sl_dist
+                
             dynamic_tp = dynamic_sl * 1.5
             current_price = asset_df['Close'].iloc[-1]
             

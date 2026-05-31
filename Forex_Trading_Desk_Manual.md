@@ -35,7 +35,8 @@ The desk runs three distinct strategies simultaneously to diversify risk.
 ### 3. Quant Predictor (AI / Machine Learning)
 *   **Logic**: A Random Forest model trained on RSI, Volatility, and Momentum indicators.
 *   **Signal**: Predicts the direction of the next 4-hour candle for `EURUSD` and `USDJPY`.
-*   **Confidence**: Requires a **58% confidence threshold** to execute a trade.
+*   **Confidence**: Requires a **62% confidence threshold** to execute a trade (Updated May 23, 2026).
+*   **Exit**: Dynamic ATR-based TP/SL OR **4-hour max hold time-based exit** (Updated May 23, 2026).
 *   **Magic Number**: `111`
 
 ---
@@ -59,3 +60,15 @@ When starting a new session with an AI assistant:
 1.  Reference this `Forex_Trading_Desk_Manual.md` file.
 2.  Ensure any changes are applied to **BOTH** the 5k and 10k directories.
 3.  Check the `mt5_executor.py` for trade execution logic before modifying strategy entry rules.
+
+
+## 📅 Update History
+
+### May 23, 2026: AI Strategy Optimization
+1. **Confidence Threshold**: Raised `ML_CONFIDENCE_THRESHOLD` to `0.62` to reduce trade frequency.
+2. **Time-Based Exit**: Implemented `close_expired_ai_positions` to automatically exit AI trades after 4 hours of hold time based on broker server time.
+
+### May 26, 2026: SL/TP Breathing Room Optimization
+1. **ATR Multiplier Increase**: Raised hourly ATR multiplier from `1.2x` to `3.5x` in `get_current_signal.py` to expand standard SL distances to ~25-30 pips.
+2. **Minimum Safety SL**: Enforced a minimum safety stop loss of **20 pips** (`0.20` for USDJPY, `0.0020` for EURUSD) to prevent instant stop-out during ultra-low volatility hours.
+3. **Re-scaled TP**: Adjusted Take Profit to `1.5 * dynamic_sl` (minimum 30-pip target) to maintain the 1:1.5 Risk-to-Reward ratio.

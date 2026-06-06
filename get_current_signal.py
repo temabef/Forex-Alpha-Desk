@@ -356,7 +356,7 @@ async def get_signal():
         print(f"⚠️ AI Strategy inactive outside London/NY hours (Current UTC hour: {current_utc_hour}).")
         log_to_file(f"AI: Skipping execution, outside active session (hour {current_utc_hour})")
     else:
-        for asset in ["EURUSD", "USDJPY"]:
+        for asset in ["USDJPY"]:
             if asset not in raw_data:
                 print(f"⚠️ SKIPPING AI analysis for {asset}: Missing data.")
                 continue
@@ -414,37 +414,37 @@ async def get_signal():
                         tp_level = current_price - dynamic_tp
                         sl_level = current_price + dynamic_sl
                     
-                # --- PIP CALCULATION (JPY vs Normal) ---
-                pip_multiplier = 100 if "JPY" in asset else 10000
-                tp_pips = int(dynamic_tp * pip_multiplier)
-                sl_pips = int(dynamic_sl * pip_multiplier)
+                    # --- PIP CALCULATION (JPY vs Normal) ---
+                    pip_multiplier = 100 if "JPY" in asset else 10000
+                    tp_pips = int(dynamic_tp * pip_multiplier)
+                    sl_pips = int(dynamic_sl * pip_multiplier)
 
-                # --- CHECK ACTIVE POSITIONS FOR THIS STRATEGY ---
-                active_positions = get_mt5_active_positions(strategy_name='AI')
-                
-                if not any(pos.upper() == asset.upper() for pos in active_positions):
-                    # Format based on JPY
-                    p_fmt = ".2f" if "JPY" in asset else ".5f"
-                    ml_report = (
-                        f"{icon} *Quant Predictor (Adaptive AI)*\n"
-                        f"Asset: `{asset}`\n"
-                        f"Prediction: `{direction}`\n"
-                        f"Confidence: `{probability*100:.1f}%`\n"
-                        f"Price: `{current_price:{p_fmt}}`\n\n"
-                        f"🎯 *Adaptive Targets:* \n"
-                        f"TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
-                        f"SL: `{sl_level:{p_fmt}}` (~{sl_pips} pips)\n\n"
-                        f"Action: Entering {'Long' if prediction == 1 else 'Short'}"
-                    )
-                    log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
-                    await send_telegram_msg(ml_report)
-                    # Safe volume for $10k Prop Account
-                    execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level)
+                    # --- CHECK ACTIVE POSITIONS FOR THIS STRATEGY ---
+                    active_positions = get_mt5_active_positions(strategy_name='AI')
+                    
+                    if not any(pos.upper() == asset.upper() for pos in active_positions):
+                        # Format based on JPY
+                        p_fmt = ".2f" if "JPY" in asset else ".5f"
+                        ml_report = (
+                            f"{icon} *Quant Predictor (Adaptive AI)*\n"
+                            f"Asset: `{asset}`\n"
+                            f"Prediction: `{direction}`\n"
+                            f"Confidence: `{probability*100:.1f}%`\n"
+                            f"Price: `{current_price:{p_fmt}}`\n\n"
+                            f"🎯 *Adaptive Targets:* \n"
+                            f"TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
+                            f"SL: `{sl_level:{p_fmt}}` (~{sl_pips} pips)\n\n"
+                            f"Action: Entering {'Long' if prediction == 1 else 'Short'}"
+                        )
+                        log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
+                        await send_telegram_msg(ml_report)
+                        # Safe volume for $10k Prop Account
+                        execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level)
+                    else:
+                        print(f"AI: {asset} position already open. Skipping.")
                 else:
-                    print(f"AI: {asset} position already open. Skipping.")
-            else:
-                log_to_file(f"AI ({asset}): Confidence low ({probability*100:.1f}%). Threshold: {ML_CONFIDENCE_THRESHOLD*100}%. Waiting.")
-                print(f"AI ({asset}): Low confidence ({probability*100:.1f}%). Waiting.")
+                    log_to_file(f"AI ({asset}): Confidence low ({probability*100:.1f}%). Threshold: {ML_CONFIDENCE_THRESHOLD*100}%. Waiting.")
+                    print(f"AI ({asset}): Low confidence ({probability*100:.1f}%). Waiting.")
         else:
             print(f"AI ({asset}): Not enough data or prediction failed.")
     

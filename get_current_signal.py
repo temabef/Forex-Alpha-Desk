@@ -190,7 +190,7 @@ async def get_signal():
         print(f"⚠️ Error running expired AI close: {e}")
 
     # --- SYMBOL CONFIG ---
-    symbols = ["EURUSD", "GBPUSD", "USDJPY"]
+    symbols = ["EURUSD", "GBPUSD", "USDJPY", "GBPJPY"]
     raw_data = {}
 
     # Fetch recent data directly from MT5 (1500 bars ~ 60 trading days of H1)
@@ -447,6 +447,64 @@ async def get_signal():
                     print(f"AI ({asset}): Low confidence ({probability*100:.1f}%). Waiting.")
         else:
             print(f"AI ({asset}): Not enough data or prediction failed.")
+
+    print("\n" + "="*40)
+    print("STRATEGY 4: GBPJPY SWING BREAKOUT")
+    print("="*40)
+    
+    asset = "GBPJPY"
+    if asset in raw_data:
+        gbpjpy_df = raw_data[asset].dropna()
+        active_positions = get_mt5_active_positions(strategy_name='Swing')
+        
+        if len(gbpjpy_df) >= 200:
+            closes = gbpjpy_df['Close'].values
+            highs = gbpjpy_df['High'].values
+            lows = gbpjpy_df['Low'].values
+            
+            ema_50 = gbpjpy_df['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            ema_200 = gbpjpy_df['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            
+            # 24-hour breakout
+            lookback = 24
+            recent_highs = highs[-lookback - 1 : -1]
+            recent_lows = lows[-lookback - 1 : -1]
+            
+            upper_channel = np.max(recent_highs)
+            lower_channel = np.min(recent_lows)
+            
+            current_close = closes[-1]
+            
+            print(f"Close: {current_close:.3f} | Upper 24h: {upper_channel:.3f} | Lower 24h: {lower_channel:.3f}")
+            print(f"EMA-50: {ema_50:.3f} | EMA-200: {ema_200:.3f}")
+            
+            if current_close > upper_channel and ema_50 > ema_200:
+                if not any(pos.upper() == asset for pos in active_positions):
+                    sl_price = current_close - (50 * 0.01)
+                    tp_price = current_close + (100 * 0.01)
+                    report = f"📈 *SIGNAL: THE BEAST (LONG)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: `{sl_price:.3f}` (50 pips)\nTP: `{tp_price:.3f}` (100 pips)"
+                    log_to_file(f"Swing: {asset} LONG Signal Sent")
+                    await send_telegram_msg(report)
+                    execute_mt5_trade('Swing', 'BUY', symbol=asset, volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
+                else:
+                    print(f"Swing: {asset} position already open.")
+            elif current_close < lower_channel and ema_50 < ema_200:
+                if not any(pos.upper() == asset for pos in active_positions):
+                    sl_price = current_close + (50 * 0.01)
+                    tp_price = current_close - (100 * 0.01)
+                    report = f"🔴 *SIGNAL: THE BEAST (SHORT)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: `{sl_price:.3f}` (50 pips)\nTP: `{tp_price:.3f}` (100 pips)"
+                    log_to_file(f"Swing: {asset} SHORT Signal Sent")
+                    await send_telegram_msg(report)
+                    execute_mt5_trade('Swing', 'SELL', symbol=asset, volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
+                else:
+                    print(f"Swing: {asset} position already open.")
+            else:
+                print(f"RECOMMENDATION: WAIT (No breakout or against macro trend)")
+        else:
+            print(f"⚠️ SKIPPING Strategy 4: Not enough data for {asset}.")
+    else:
+        print(f"⚠️ SKIPPING Strategy 4: Missing data for {asset}.")
+
     
     # --- SESSION CLEANUP ---
     mt5.shutdown()

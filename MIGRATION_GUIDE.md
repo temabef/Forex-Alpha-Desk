@@ -57,4 +57,38 @@ Because `.env` files contain sensitive API keys and secrets, they are intentiona
    - Start in: The full path to your folder (e.g., `C:\Users\Administrator\Documents\Forex-Alpha-Desk`).
 6. Save the task and enter your Windows administrator password.
 
-Your Nautilus Engine is now fully migrated and operational on the new VPS!
+---
+
+## 📜 Historical Strategy Evolution (For Future Engineers)
+
+If you are reading this codebase in the future, it is important to understand the evolutionary history of the Nautilus Engine and why certain strategies exist (or were removed). Over several months of live-market prop firm testing, the portfolio underwent significant tuning.
+
+### Phase 1: The Kitchen Sink Approach
+Initially, the bot ran multiple strategies simultaneously:
+1. **Pairs Trading (EURUSD / GBPUSD):** A statistical arbitrage mean-reversion hedge.
+2. **Donchian Breakout (Trend):** A breakout momentum strategy targeting EURUSD.
+3. **Quant Predictor (AI):** A machine-learning adaptive model predicting short-term direction.
+
+**The Problem:** The portfolio stagnated around break-even. While the AI strategy was consistently generating profits, the Breakout and Pairs strategies were extremely vulnerable to summer market chop and fundamental divergence. 
+- *Pairs Breakdown:* During major central bank announcements, the EUR/GBP correlation broke down, causing the mean-reversion logic to fail and hit deep drawdowns.
+- *Breakout Fakeouts:* The EURUSD Donchian Breakout strategy repeatedly bought the absolute top and sold the absolute bottom of ranges right before violent reversals, immediately hitting the 50-pip stop loss.
+
+### Phase 2: Adding "The Beast" (GBPJPY)
+To capture massive volatility, we implemented a specialized breakout strategy just for GBPJPY ("The Beast"). 
+- **Specs:** 100-pip Take Profit, 50-pip Stop Loss.
+- **Filter:** We added a strict H1 50/200 EMA trend filter to prevent it from firing during sideways chop. 
+- **Result:** The EMA filter worked beautifully to keep the bot out of bad trades, but whenever it did fire, GBPJPY's erratic fakeouts still caused unnecessary losses.
+
+### Phase 3: Risk Mitigation & Order 66
+Realizing that the Breakout strategies were dragging down the highly accurate AI strategy, we took the following steps:
+1. **Halved Lot Sizes:** We manually cut the `LOT_SIZE_TREND` in the `.env` files by 50% to stop the bleeding while we observed the Breakouts for one final week.
+2. **The Final Cut (July 2026):** After one final week where the AI generated massive profits (+$25/trade) and the EURUSD Breakout lost money again (-$20/trade), we officially executed "Order 66". 
+3. **Code Purge:** The `STRATEGY 2: DONCHIAN BREAKOUT (Trend)` block was completely deleted from `get_current_signal.py`.
+
+### The Current State (The Lean MVP)
+The Nautilus Engine now operates as a lean, highly targeted machine:
+- **The MVP:** The Quant Predictor AI handles the heavy lifting, currently fine-tuned to extract consistent profits from USDJPY using dynamic targets.
+- **The Hedge:** The Pairs strategy runs quietly in the background for low-risk, steady grinding when correlations align.
+- **The Standby:** The GBPJPY Beast remains in the code but is heavily filtered, waiting silently for a true macro trend breakout.
+
+*Future Note: If you wish to scale the bot's profitability, DO NOT reintroduce simple breakouts. Instead, expand the Quant Predictor AI to cover more assets (EURUSD, GBPUSD) or increase `LOT_SIZE_AI`.*

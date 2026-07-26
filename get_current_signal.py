@@ -275,77 +275,7 @@ async def get_signal():
                 log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT)")
                 print("RECOMMENDATION: WAIT (No signal)")
 
-    print("\n" + "="*40)
-    print("STRATEGY 2: DONCHIAN BREAKOUT (Trend)")
-    print("="*40)
-    
-    eurusd_df = raw_data["EURUSD"].dropna()
-    
-    # --- CHECK ACTIVE POSITIONS FOR TREND ---
-    active_positions = get_mt5_active_positions(strategy_name='Trend')
-    print(f"INFO: MT5 Active positions for Trend: {active_positions}")
-    entry_lookback = 400
-    exit_lookback = 200 
-    
-    if len(eurusd_df) >= entry_lookback + 1:
-        highs = eurusd_df['High'].values
-        lows = eurusd_df['Low'].values
-        closes = eurusd_df['Close'].values
-        
-        recent_highs = highs[-entry_lookback - 1 : -1]
-        recent_lows = lows[-entry_lookback - 1 : -1]
-        upper_channel = np.max(recent_highs)
-        lower_channel = np.min(recent_lows)
-        
-        exit_recent_highs = highs[-exit_lookback - 1 : -1]
-        exit_recent_lows = lows[-exit_lookback - 1 : -1]
-        exit_upper = np.max(exit_recent_highs)
-        exit_lower = np.min(exit_recent_lows)
-        
-        current_close = closes[-1]
-        
-        print(f"Close: {current_close:.5f} | Upper: {upper_channel:.5f} | Lower: {lower_channel:.5f}")
-        
-        if current_close > upper_channel:
-            # Case-Insensitive check
-            if not any(pos.upper() == "EURUSD" for pos in active_positions):
-                sl_price = lower_channel
-                max_sl_dist = 50 * 0.0001
-                if current_close - sl_price > max_sl_dist:
-                    sl_price = current_close - max_sl_dist
-                
-                tp_dist = 70 * 0.0001
-                tp_price = current_close + tp_dist
-                trend_report = f"📈 *SIGNAL: BREAKOUT LONG*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
-                log_to_file(f"Trend: BREAKOUT LONG Signal Sent (Price: {current_close:.5f})")
-                await send_telegram_msg(trend_report)
-                execute_mt5_trade('Trend', 'BUY', symbol='EURUSD', volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
-            else:
-                print("Trend: Breakout detected but Trend position already open. Skipping.")
-        elif current_close < lower_channel:
-            # Case-Insensitive check
-            if not any(pos.upper() == "EURUSD" for pos in active_positions):
-                sl_price = upper_channel
-                max_sl_dist = 50 * 0.0001
-                if sl_price - current_close > max_sl_dist:
-                    sl_price = current_close + max_sl_dist
-                
-                tp_dist = 70 * 0.0001
-                tp_price = current_close - tp_dist
-                trend_report = f"🔴 *SIGNAL: BREAKOUT SHORT*\nEntry: `{current_close:.5f}`\nSL: `{sl_price:.5f}`\nTP: `{tp_price:.5f}`"
-                log_to_file(f"Trend: BREAKOUT SHORT Signal Sent (Price: {current_close:.5f})")
-                await send_telegram_msg(trend_report)
-                execute_mt5_trade('Trend', 'SELL', symbol='EURUSD', volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
-            else:
-                print("Trend: Breakout detected but Trend position already open. Skipping.")
-        elif current_close < exit_lower or current_close > exit_upper:
-            trend_report = f"🛑 *TREND EXIT ALERT*\nClose: `{current_close:.5f}`\nAction: Consider CLOSING Trend trades."
-            log_to_file("Trend: EXIT ALERT Sent")
-            await send_telegram_msg(trend_report)
-            execute_mt5_trade('Trend', 'EXIT', symbol='EURUSD')
-        else:
-            log_to_file(f"Trend: Inside Channel (High: {upper_channel:.5f}, Low: {lower_channel:.5f})")
-            print("RECOMMENDATION: WAIT (Inside channel)")
+
 
     print("\n" + "="*40)
     print("STRATEGY 3: QUANT PREDICTOR (Multi-Pair AI)")

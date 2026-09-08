@@ -78,11 +78,19 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
     
     # 5. Handle SL/TP (Smart vs Emergency Backup)
     if action != 'EXIT':
-        if sl is None or tp is None:
+        pip_size = 0.01 if "JPY" in symbol else 0.0001
+        if strategy_name == 'Swing':
+            # Always anchor GBPJPY Swing SL/TP to live fill price: 50 pips SL, 100 pips TP
+            sl_dist = 50 * pip_size
+            tp_dist = 100 * pip_size
+            sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
+            tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
+        elif sl is None or tp is None:
             # Safety targets
-            pip_size = 0.01 if "JPY" in symbol else 0.0001
             sl_dist = 150 * pip_size
-            tp_dist = 40 * pip_size
+            # For Pairs trading, do NOT set tight single-leg TP that breaks the hedge!
+            # Use broad 150 pip safety TP so Z-Score exit manages the pair exit.
+            tp_dist = 150 * pip_size if strategy_name == 'Pairs' else 40 * pip_size
             sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
             tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
     else:
@@ -297,6 +305,16 @@ def close_expired_ai_positions(max_age_seconds=14300):
                     print(f"MT5 Order Failed on age exit: {result.comment if result else 'Unknown'}")
                 else:
                     print(f"Successfully closed expired AI position {p.ticket} ({p.symbol})")
+                    # Record 1-hour cooldown timestamp to prevent immediate re-entry loop
+                    try:
+                        import json
+                        import time
+                        cooldown_file = f"logs/ai_cooldown_{clean_symbol.upper()}.json"
+                        with open(cooldown_file, "w") as cf:
+                            json.dump({"timestamp": time.time(), "symbol": clean_symbol}, cf)
+                        print(f"Recorded post-expiration 1-hour cooldown for {clean_symbol}")
+                    except Exception as ce:
+                        print(f"Error saving cooldown file: {ce}")
                     
     return True
 

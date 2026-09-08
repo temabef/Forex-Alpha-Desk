@@ -1,4 +1,16 @@
 import os
+import sys
+
+# Set UTF-8 encoding for Windows console print output
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+# --- PATH FIX FOR BACKGROUND TASKS ---
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+os.chdir(script_dir)
+
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -7,21 +19,16 @@ import pandas as pd
 import numpy as np
 import asyncio
 from telegram import Bot
-from datetime import datetime, timezone
-from mt5_executor import execute_mt5_trade, get_mt5_active_positions, close_all_active_positions
-import os
+from datetime import datetime, timedelta, timezone
 import json
 from dotenv import load_dotenv
 import MetaTrader5 as mt5
+
+from mt5_executor import execute_mt5_trade, get_mt5_active_positions, close_all_active_positions
 from news_manager import is_in_danger_zone
 
 # Load secrets from .env file
 load_dotenv()
-
-# --- PATH FIX FOR BACKGROUND TASKS ---
-# This ensures the script always runs in its own folder
-script_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(script_dir)
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -40,7 +47,7 @@ def log_to_file(message):
 
 async def send_telegram_msg(message):
     if TELEGRAM_CHAT_ID == "PASTE_YOUR_CHAT_ID_HERE":
-        print("⚠️ Telegram Chat ID not set. Skipping notification.")
+        print(" Telegram Chat ID not set. Skipping notification.")
         return
     try:
         bot = Bot(token=TELEGRAM_TOKEN)
@@ -61,17 +68,44 @@ def fetch_mt5_data(symbol, num_bars=1500):
     # Append broker suffix if necessary (e.g. .x)
     suffix = os.getenv("SYMBOL_SUFFIX", "")
     broker_symbol = f"{symbol}{suffix}"
+    
+    # Ensure symbol is selected in Market Watch
+    mt5.symbol_select(broker_symbol, True)
         
     rates = mt5.copy_rates_from_pos(broker_symbol, mt5.TIMEFRAME_H1, 0, num_bars)
-    if rates is None or len(rates) == 0:
-        print(f"Failed to fetch data for {broker_symbol}")
-        return None
-        
-    df = pd.DataFrame(rates)
-    df['time'] = pd.to_datetime(df['time'], unit='s')
-    df.set_index('time', inplace=True)
-    df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
-    return df
+    if rates is not None and len(rates) > 0:
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        latest_bar_time = df['time'].iloc[-1]
+        # Verify rates data freshness (must be within last 2.5 hours)
+        now_time = datetime.utcnow()
+        if (now_time - latest_bar_time).total_seconds() < 9000: # 2.5 hours
+            df.set_index('time', inplace=True)
+            df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
+            return df
+        else:
+            print(f"MT5 rates for {broker_symbol} are STALE (last bar: {latest_bar_time}). Falling back to tick resampling...")
+
+    # --- FALLBACK: If copy_rates fails, fetch ticks and resample to H1 candles ---
+    print(f"Rates fetch failed for {broker_symbol}, attempting tick resampling fallback...")
+    try:
+        now = datetime.now()
+        past = now - timedelta(days=14)
+        ticks = mt5.copy_ticks_range(broker_symbol, past, now, mt5.COPY_TICKS_ALL)
+        if ticks is not None and len(ticks) > 0:
+            df_ticks = pd.DataFrame(ticks)
+            df_ticks['time'] = pd.to_datetime(df_ticks['time'], unit='s')
+            df_ticks.set_index('time', inplace=True)
+            df = df_ticks['bid'].resample('1h').ohlc().dropna()
+            df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
+            if len(df) > 0:
+                print(f"Fallback SUCCESS for {broker_symbol}: Resampled {len(df)} H1 bars from ticks.")
+                return df
+    except Exception as e:
+        print(f"Tick fallback error for {broker_symbol}: {e}")
+
+    print(f"Failed to fetch data for {broker_symbol}")
+    return None
 
 def check_daily_drawdown():
     """
@@ -146,12 +180,22 @@ def is_friday_night():
 
 async def get_signal():
     # Defer heavy imports to save RAM on startup
-    import statsmodels.api as sm
-    from ml_predictor_strategy import get_ml_prediction
-    
+    try:
+        import statsmodels.api as sm
+    except Exception as e:
+        log_to_file(f"FATAL: Could not import statsmodels: {e}")
+        print(f"FATAL: Could not import statsmodels: {e}")
+        return
+    try:
+        from ml_predictor_strategy import get_ml_prediction
+    except Exception as e:
+        log_to_file(f"FATAL: Could not import ml_predictor_strategy: {e}")
+        print(f"FATAL: Could not import ml_predictor_strategy: {e}")
+        return
+
     print(f"--- Multi-Strategy Live Signal Report ---")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    
+
     log_to_file("--- Multi-Strategy Live Signal Report ---")
     log_to_file(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
@@ -175,11 +219,11 @@ async def get_signal():
     # --- SHIELD 3: HIGH-IMPACT NEWS FILTER ---
     in_danger, news_msg = is_in_danger_zone()
     if in_danger:
-        print(f"⚠️ {news_msg}")
+        print(f" {news_msg}")
         log_to_file(f"NEWS FILTER: {news_msg}")
         # We don't exit the script, but we will pass a flag to strategies to skip ENTRIES
         # Actually, for prop firm safety, let's just skip the entire execution this hour
-        await send_telegram_msg(f"⚠️ *NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
+        await send_telegram_msg(f" *NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
         return
 
     # --- SHIELD 4: AI TRADE EXPIRATION CLOSE (4-HOUR MAX HOLD) ---
@@ -187,7 +231,7 @@ async def get_signal():
         from mt5_executor import close_expired_ai_positions
         close_expired_ai_positions()
     except Exception as e:
-        print(f"⚠️ Error running expired AI close: {e}")
+        print(f" Error running expired AI close: {e}")
 
     # --- SYMBOL CONFIG ---
     symbols = ["EURUSD", "GBPUSD", "USDJPY", "GBPJPY"]
@@ -198,7 +242,7 @@ async def get_signal():
         print(f"Fetching latest data for {symbol} from MT5...")
         df = fetch_mt5_data(symbol, num_bars=1500)
         if df is None or df.empty or len(df) < 60:
-            print(f"⚠️ WARNING: Not enough data for {symbol} in MT5. Skipping strategy logic.")
+            print(f" WARNING: Not enough data for {symbol} in MT5. Skipping strategy logic.")
             continue
         raw_data[symbol] = df
 
@@ -212,8 +256,10 @@ async def get_signal():
     
     # --- SAFETY CHECK: Ensure both symbols exist in raw_data ---
     if "EURUSD" not in raw_data or "GBPUSD" not in raw_data:
-        print("⚠️ SKIPPING Strategy 1 (Pairs): Missing data for EURUSD or GBPUSD.")
+        print("SKIPPING Strategy 1 (Pairs): Missing data for EURUSD or GBPUSD.")
+        log_to_file("Pairs: SKIPPED - missing EURUSD or GBPUSD data")
     else:
+      try:
         df_combined = pd.concat([raw_data["EURUSD"]["Close"], raw_data["GBPUSD"]["Close"]], axis=1).dropna()
         df_combined.columns = ["EURUSD", "GBPUSD"]
         
@@ -272,8 +318,11 @@ async def get_signal():
                     log_to_file(f"Pairs: Z-Score={z_score:.2f} (Target reached but no active position)")
                     print("Pairs: Target reached but no active position found. Skipping alert.")
             else:
-                log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT)")
-                print("RECOMMENDATION: WAIT (No signal)")
+                log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT - threshold is +/-{ENTRY_THRESHOLD})")
+                print(f"RECOMMENDATION: WAIT (Z-Score={z_score:.2f}, need +/-{ENTRY_THRESHOLD})")
+      except Exception as e:
+          log_to_file(f"Pairs: ERROR - {e}")
+          print(f"Pairs Strategy Error: {e}")
 
 
 
@@ -283,12 +332,12 @@ async def get_signal():
     
     current_utc_hour = datetime.utcnow().hour
     if not (7 <= current_utc_hour <= 17):
-        print(f"⚠️ AI Strategy inactive outside London/NY hours (Current UTC hour: {current_utc_hour}).")
+        print(f" AI Strategy inactive outside London/NY hours (Current UTC hour: {current_utc_hour}).")
         log_to_file(f"AI: Skipping execution, outside active session (hour {current_utc_hour})")
     else:
         for asset in ["USDJPY"]:
             if asset not in raw_data:
-                print(f"⚠️ SKIPPING AI analysis for {asset}: Missing data.")
+                print(f" SKIPPING AI analysis for {asset}: Missing data.")
                 continue
                 
             print(f"\nAnalyzing {asset}...")
@@ -304,8 +353,8 @@ async def get_signal():
                 recent_24 = asset_df.tail(24)
                 atr = (recent_24['High'] - recent_24['Low']).mean()
                 
-                # Increase ATR multiplier to give trades breathing room (3.5x ATR instead of 1.2x)
-                dynamic_sl = atr * 3.5
+                # Realistic ATR multiplier for 4-hour holding window (1.2x ATR instead of 3.5x)
+                dynamic_sl = atr * 1.2
                 
                 # Enforce a minimum safety SL of 20 pips to avoid instant stop-outs during low-volatility hours
                 pip_size = 0.01 if "JPY" in asset else 0.0001
@@ -349,9 +398,24 @@ async def get_signal():
                     tp_pips = int(dynamic_tp * pip_multiplier)
                     sl_pips = int(dynamic_sl * pip_multiplier)
 
-                    # --- CHECK ACTIVE POSITIONS FOR THIS STRATEGY ---
+                    # --- CHECK ACTIVE POSITIONS & COOLDOWN FOR THIS STRATEGY ---
                     active_positions = get_mt5_active_positions(strategy_name='AI')
                     
+                    # Check 1-Hour Post-Expiration Cooldown
+                    cooldown_file = f"logs/ai_cooldown_{asset.upper()}.json"
+                    if os.path.exists(cooldown_file):
+                        try:
+                            with open(cooldown_file, "r") as cf:
+                                data = json.load(cf)
+                                last_exit_time = data.get("timestamp", 0)
+                                if datetime.now().timestamp() - last_exit_time < 3600: # 60 minutes
+                                    remaining_m = int((3600 - (datetime.now().timestamp() - last_exit_time)) / 60)
+                                    log_to_file(f"AI ({asset}): Post-expiration 1-hour cooldown active ({remaining_m}m remaining). Skipping re-entry.")
+                                    print(f"AI ({asset}): Post-expiration 1-hour cooldown active ({remaining_m}m remaining). Skipping re-entry.")
+                                    continue
+                        except Exception as e:
+                            pass
+
                     if not any(pos.upper() == asset.upper() for pos in active_positions):
                         # Format based on JPY
                         p_fmt = ".2f" if "JPY" in asset else ".5f"
@@ -387,7 +451,46 @@ async def get_signal():
         gbpjpy_df = raw_data[asset].dropna()
         active_positions = get_mt5_active_positions(strategy_name='Swing')
         
-        if len(gbpjpy_df) >= 200:
+        # --- TRACK SWING EXITS & ENFORCE 4-HOUR POST-EXIT COOLDOWN ---
+        swing_state_file = "logs/swing_state.json"
+        swing_cooldown_file = "logs/swing_cooldown.json"
+        
+        had_pos = False
+        if os.path.exists(swing_state_file):
+            try:
+                with open(swing_state_file, "r") as sf:
+                    had_pos = json.load(sf).get("has_pos", False)
+            except:
+                pass
+
+        has_curr_pos = len(active_positions) > 0
+        if had_pos and not has_curr_pos:
+            # Swing position closed! Record cooldown timestamp
+            with open(swing_cooldown_file, "w") as cf:
+                json.dump({"timestamp": datetime.now().timestamp()}, cf)
+            log_to_file("Swing (GBPJPY): Position exit detected. Setting 4-hour cooldown.")
+            print("Swing (GBPJPY): Position exit detected. Setting 4-hour cooldown.")
+
+        # Save current state
+        with open(swing_state_file, "w") as sf:
+            json.dump({"has_pos": has_curr_pos}, sf)
+
+        # Check 4-Hour Cooldown Filter before entry
+        is_cooling = False
+        if os.path.exists(swing_cooldown_file):
+            try:
+                with open(swing_cooldown_file, "r") as cf:
+                    last_exit = json.load(cf).get("timestamp", 0)
+                    elapsed = datetime.now().timestamp() - last_exit
+                    if elapsed < 14400: # 4 hours (14400 seconds)
+                        rem_m = int((14400 - elapsed) / 60)
+                        log_to_file(f"Swing (GBPJPY): 4-hour post-exit cooldown active ({rem_m}m remaining). Skipping re-entry.")
+                        print(f"Swing (GBPJPY): 4-hour post-exit cooldown active ({rem_m}m remaining). Skipping re-entry.")
+                        is_cooling = True
+            except Exception as e:
+                pass
+
+        if not is_cooling and len(gbpjpy_df) >= 200:
             closes = gbpjpy_df['Close'].values
             highs = gbpjpy_df['High'].values
             lows = gbpjpy_df['Low'].values
@@ -410,30 +513,29 @@ async def get_signal():
             
             if current_close > upper_channel and ema_50 > ema_200:
                 if not any(pos.upper() == asset for pos in active_positions):
-                    sl_price = current_close - (50 * 0.01)
-                    tp_price = current_close + (100 * 0.01)
-                    report = f"📈 *SIGNAL: THE BEAST (LONG)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: `{sl_price:.3f}` (50 pips)\nTP: `{tp_price:.3f}` (100 pips)"
+                    report = f"📈 *SIGNAL: THE BEAST (LONG)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: 50 pips (Live Fill)\nTP: 100 pips (Live Fill)"
                     log_to_file(f"Swing: {asset} LONG Signal Sent")
                     await send_telegram_msg(report)
-                    execute_mt5_trade('Swing', 'BUY', symbol=asset, volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
+                    execute_mt5_trade('Swing', 'BUY', symbol=asset, volume=LOT_SIZE_TREND)
                 else:
                     print(f"Swing: {asset} position already open.")
             elif current_close < lower_channel and ema_50 < ema_200:
                 if not any(pos.upper() == asset for pos in active_positions):
-                    sl_price = current_close + (50 * 0.01)
-                    tp_price = current_close - (100 * 0.01)
-                    report = f"🔴 *SIGNAL: THE BEAST (SHORT)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: `{sl_price:.3f}` (50 pips)\nTP: `{tp_price:.3f}` (100 pips)"
+                    report = f"🔴 *SIGNAL: THE BEAST (SHORT)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: 50 pips (Live Fill)\nTP: 100 pips (Live Fill)"
                     log_to_file(f"Swing: {asset} SHORT Signal Sent")
                     await send_telegram_msg(report)
-                    execute_mt5_trade('Swing', 'SELL', symbol=asset, volume=LOT_SIZE_TREND, sl=sl_price, tp=tp_price)
+                    execute_mt5_trade('Swing', 'SELL', symbol=asset, volume=LOT_SIZE_TREND)
                 else:
                     print(f"Swing: {asset} position already open.")
             else:
+                log_to_file(f"Swing ({asset}): WAIT - No breakout. Close={current_close:.3f} Upper={upper_channel:.3f} Lower={lower_channel:.3f} EMA50={ema_50:.3f} EMA200={ema_200:.3f}")
                 print(f"RECOMMENDATION: WAIT (No breakout or against macro trend)")
         else:
-            print(f"⚠️ SKIPPING Strategy 4: Not enough data for {asset}.")
+            log_to_file(f"Swing ({asset}): SKIPPED - Not enough data ({len(gbpjpy_df)} bars)")
+            print(f"SKIPPING Strategy 4: Not enough data for {asset}.")
     else:
-        print(f"⚠️ SKIPPING Strategy 4: Missing data for {asset}.")
+        log_to_file(f"Swing ({asset}): SKIPPED - Missing data")
+        print(f"SKIPPING Strategy 4: Missing data for {asset}.")
 
     
     # --- SESSION CLEANUP ---
@@ -443,4 +545,14 @@ async def get_signal():
     print("="*40)
 
 if __name__ == "__main__":
-    asyncio.run(get_signal())
+    try:
+        asyncio.run(get_signal())
+    except Exception as e:
+        import traceback
+        msg = f"FATAL UNHANDLED ERROR: {e}\n{traceback.format_exc()}"
+        print(msg)
+        try:
+            with open("logs/signal_history.txt", "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except:
+            pass

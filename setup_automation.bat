@@ -1,6 +1,6 @@
 @echo off
 SET "BASE_DIR=%~dp0"
-SET "PYTHON_EXE=%BASE_DIR%venv\Scripts\python.exe"
+SET "PYTHON_EXE=C:\Users\saheedvod\Python311\python.exe"
 SET "SCRIPT_PATH=%BASE_DIR%get_current_signal.py"
 
 echo --- Robust Forex Bot Automation Setup ---

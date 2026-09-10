@@ -7,6 +7,23 @@ This document maintains a chronological record of all architectural upgrades, bu
 
 ## 📅 Chronological Change Log
 
+### 2026-09-10: Strategic Transition to Multi-Pair AI Desk (Path 2) & Z-Score Retirement
+
+1. **Retirement of Strategy 1 (Z-Score Pairs Arbitrage)**:
+   - **Reason**: Quantitative analysis of 260+ closed trades (May–September 2026) revealed that Strategy 1 was unprofitable (Profit Factor 0.70 – 0.81) and caused a cumulative loss drag of **-$423.64** across both accounts due to double-spread friction, swap fees, and macroeconomic non-cointegration between EUR and GBP.
+   - **Action**: Completely deactivated Z-Score paired entry execution in `get_current_signal.py`. Added auto-exit fail-safe for any lingering legacy pairs positions.
+
+2. **Expansion of Strategy 3 (AI Quant Predictor) to Multi-Pair Desk (`USDJPY`, `EURUSD`, `GBPUSD`)**:
+   - **Walk-Forward Validation**: 1,500-bar out-of-sample backtest demonstrated consistent predictive accuracy across majors: **EURUSD (54.9%)**, **GBPUSD (53.7%)**, and **USDJPY (53.1%)**.
+   - **Execution Model**: All 3 pairs now trade independently with single-direction execution, dynamic ATR targets (1.2x ATR Stop Loss, 1.8x ATR Take Profit = 1:1.5 R:R), 4-hour time-stop expiration, and 1-hour post-expiration cooldown. Minimum safety Stop Loss is set to 20 pips for JPY pairs and 15 pips for EURUSD/GBPUSD.
+
+3. **Risk Budget Reallocation & Lot Size Tuning**:
+   - **10k Account**: `LOT_SIZE_AI = 0.15` (spread across USDJPY, EURUSD, GBPUSD), `LOT_SIZE_TREND = 0.14` (GBPJPY Swing). Max risk per trade ~0.35% - 0.45%.
+   - **5k Account**: `LOT_SIZE_AI = 0.08`, `LOT_SIZE_TREND = 0.08`. Max risk per trade ~0.35% - 0.45%.
+   - Total portfolio risk is calibrated for institutional FTMO $100k requirements, keeping daily drawdown far below the 4-5% threshold.
+
+---
+
 ### 2026-09-10: Multi-Terminal MT5 Synchronization & Tick Resampling Optimization
 
 1. **MT5 Tick Resampling Window Optimization (`days=5`)**:

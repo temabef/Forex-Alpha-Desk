@@ -249,14 +249,17 @@ def close_expired_ai_positions(max_age_seconds=14300):
         
     suffix = os.getenv("SYMBOL_SUFFIX", "")
     
-    # Fetch broker current time from ticks of EURUSD to avoid local time/server time mismatch
-    eurusd_broker_symbol = f"EURUSD{suffix}"
-    tick = mt5.symbol_info_tick(eurusd_broker_symbol)
-    if tick is None:
-        print("MT5: Failed to fetch symbol tick for time comparison. Skipping age check.")
-        return False
-        
-    current_time = tick.time
+    # Fetch broker current time from ticks of major symbols to avoid time mismatch
+    current_time = None
+    for check_sym in [f"EURUSD{suffix}", f"USDJPY{suffix}", f"GBPUSD{suffix}"]:
+        tick = mt5.symbol_info_tick(check_sym)
+        if tick and tick.time:
+            current_time = tick.time
+            break
+            
+    if current_time is None:
+        from datetime import datetime, timezone
+        current_time = int(datetime.now(timezone.utc).timestamp())
     
     for p in positions:
         if p.magic == magic:

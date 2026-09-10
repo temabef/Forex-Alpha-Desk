@@ -33,13 +33,10 @@ load_dotenv()
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-# --- RISK CONFIGURATION (For $10k Prop Account) ---
-ENTRY_THRESHOLD = 2.0
-EXIT_THRESHOLD = 0.2
-ML_CONFIDENCE_THRESHOLD = 0.62 
-LOT_SIZE_AI = float(os.getenv("LOT_SIZE_AI", 0.05))
-LOT_SIZE_PAIRS = float(os.getenv("LOT_SIZE_PAIRS", 0.02))
-LOT_SIZE_TREND = float(os.getenv("LOT_SIZE_TREND", 0.05))
+# --- RISK CONFIGURATION ---
+ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", 0.60))
+LOT_SIZE_AI = float(os.getenv("LOT_SIZE_AI", 0.08))
+LOT_SIZE_TREND = float(os.getenv("LOT_SIZE_TREND", 0.08))
 
 def log_to_file(message):
     with open("logs/signal_history.txt", "a", encoding="utf-8") as f:
@@ -247,87 +244,18 @@ async def get_signal():
         raw_data[symbol] = df
 
     print("\n" + "="*40)
-    print("STRATEGY 1: PAIRS TRADING (Mean Reversion)")
+    print("STRATEGY 1: PAIRS TRADING (RETIRED)")
     print("="*40)
-    
-    # --- CHECK ACTIVE POSITIONS FOR PAIRS ---
-    active_positions = get_mt5_active_positions(strategy_name='Pairs')
-    print(f"INFO: MT5 Active positions for Pairs: {active_positions}")
-    
-    # --- SAFETY CHECK: Ensure both symbols exist in raw_data ---
-    if "EURUSD" not in raw_data or "GBPUSD" not in raw_data:
-        print("SKIPPING Strategy 1 (Pairs): Missing data for EURUSD or GBPUSD.")
-        log_to_file("Pairs: SKIPPED - missing EURUSD or GBPUSD data")
-    else:
-      try:
-        df_combined = pd.concat([raw_data["EURUSD"]["Close"], raw_data["GBPUSD"]["Close"]], axis=1).dropna()
-        df_combined.columns = ["EURUSD", "GBPUSD"]
-        
-        lookback_pairs = 60 
-        if len(df_combined) >= lookback_pairs:
-            recent = df_combined.tail(lookback_pairs)
-            y = recent["EURUSD"].values
-            x = sm.add_constant(recent["GBPUSD"].values)
-            model = sm.OLS(y, x).fit()
-            
-            intercept = model.params[0]
-            gamma = model.params[1]
-            
-            spreads = y - (gamma * recent["GBPUSD"].values + intercept)
-            current_spread = spreads[-1]
-            mean_spread = np.mean(spreads)
-            std_spread = np.std(spreads)
-            z_score = (current_spread - mean_spread) / std_spread
-            eur_price = recent['EURUSD'].iloc[-1]
-            gbp_price = recent['GBPUSD'].iloc[-1]
-
-            print(f"Current Z-Score: {z_score:.2f}")
-            
-            if z_score > ENTRY_THRESHOLD:
-                # Only send SELL signal if we DON'T have a position (Case-Insensitive check)
-                if not any(pos.upper() == "EURUSD" for pos in active_positions):
-                    msg = f"🚨 *SIGNAL: SELL SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: SELL EURUSD, BUY GBPUSD"
-                    log_to_file(f"Pairs: SELL SPREAD Signal Sent (Z-Score: {z_score:.2f})")
-                    await send_telegram_msg(msg)
-                    execute_mt5_trade('Pairs', 'SELL', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
-                    execute_mt5_trade('Pairs', 'BUY', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
-                else:
-                    log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
-                    print("Pairs: Already in trade, suppressing duplicate SELL alert.")
-            elif z_score < -ENTRY_THRESHOLD:
-                # Only send BUY signal if we DON'T have a position
-                if not any(pos.upper() == "EURUSD" for pos in active_positions):
-                    msg = f"🚀 *SIGNAL: BUY SPREAD*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\nAction: BUY EURUSD, SELL GBPUSD"
-                    log_to_file(f"Pairs: BUY SPREAD Signal Sent (Z-Score: {z_score:.2f})")
-                    await send_telegram_msg(msg)
-                    execute_mt5_trade('Pairs', 'BUY', symbol='EURUSD', volume=LOT_SIZE_PAIRS)
-                    execute_mt5_trade('Pairs', 'SELL', symbol='GBPUSD', volume=LOT_SIZE_PAIRS)
-                else:
-                    log_to_file(f"Pairs: Z-Score={z_score:.2f} (Already in trade - suppressing alert)")
-                    print("Pairs: Already in trade, suppressing duplicate BUY alert.")
-            elif abs(z_score) < EXIT_THRESHOLD:
-                # Only send EXIT signal if we actually have a position! (Case-Insensitive)
-                if any(pos.upper() in ["EURUSD", "GBPUSD"] for pos in active_positions):
-                    msg = f"✅ *TARGET REACHED / EXIT*\n⚖️ Pairs Trading (Mean Reversion)\nZ-Score: `{z_score:.2f}`\nEURUSD: `{eur_price:.5f}`\nGBPUSD: `{gbp_price:.5f}`\n\nAction: CLOSE both Pair positions."
-                    print("RECOMMENDATION: EXIT (Target Reached)")
-                    log_to_file(f"Pairs: TARGET REACHED / EXIT Signal Sent (Z-Score: {z_score:.2f})")
-                    await send_telegram_msg(msg)
-                    execute_mt5_trade('Pairs', 'EXIT', symbol='EURUSD')
-                    execute_mt5_trade('Pairs', 'EXIT', symbol='GBPUSD')
-                else:
-                    log_to_file(f"Pairs: Z-Score={z_score:.2f} (Target reached but no active position)")
-                    print("Pairs: Target reached but no active position found. Skipping alert.")
-            else:
-                log_to_file(f"Pairs: Z-Score={z_score:.2f} (WAIT - threshold is +/-{ENTRY_THRESHOLD})")
-                print(f"RECOMMENDATION: WAIT (Z-Score={z_score:.2f}, need +/-{ENTRY_THRESHOLD})")
-      except Exception as e:
-          log_to_file(f"Pairs: ERROR - {e}")
-          print(f"Pairs Strategy Error: {e}")
-
-
+    print("INFO: Strategy 1 (Z-Score Pairs) retired in favor of Multi-Pair AI Quant Desk.")
+    # Legacy position safety exit: close any lingering Pairs positions if found
+    active_pairs_positions = get_mt5_active_positions(strategy_name='Pairs')
+    if active_pairs_positions:
+        print(f"Closing legacy Pairs positions: {active_pairs_positions}")
+        for pos_sym in active_pairs_positions:
+            execute_mt5_trade('Pairs', 'EXIT', symbol=pos_sym)
 
     print("\n" + "="*40)
-    print("STRATEGY 3: QUANT PREDICTOR (Multi-Pair AI)")
+    print("STRATEGY 3: QUANT PREDICTOR (Multi-Pair AI Desk)")
     print("="*40)
     
     current_utc_hour = datetime.utcnow().hour
@@ -335,7 +263,8 @@ async def get_signal():
         print(f" AI Strategy inactive outside London/NY hours (Current UTC hour: {current_utc_hour}).")
         log_to_file(f"AI: Skipping execution, outside active session (hour {current_utc_hour})")
     else:
-        for asset in ["USDJPY"]:
+        ai_assets = ["USDJPY", "EURUSD", "GBPUSD"]
+        for asset in ai_assets:
             if asset not in raw_data:
                 print(f" SKIPPING AI analysis for {asset}: Missing data.")
                 continue
@@ -356,9 +285,9 @@ async def get_signal():
                 # Realistic ATR multiplier for 4-hour holding window (1.2x ATR instead of 3.5x)
                 dynamic_sl = atr * 1.2
                 
-                # Enforce a minimum safety SL of 20 pips to avoid instant stop-outs during low-volatility hours
+                # Enforce pair-specific minimum safety SL (20 pips for JPY, 15 pips for EURUSD/GBPUSD)
                 pip_size = 0.01 if "JPY" in asset else 0.0001
-                min_sl_dist = 20 * pip_size
+                min_sl_dist = (20 if "JPY" in asset else 15) * pip_size
                 if dynamic_sl < min_sl_dist:
                     dynamic_sl = min_sl_dist
                     
@@ -490,13 +419,15 @@ async def get_signal():
             except Exception as e:
                 pass
 
-        if not is_cooling and len(gbpjpy_df) >= 200:
+        min_bars = 50
+        if not is_cooling and len(gbpjpy_df) >= min_bars:
             closes = gbpjpy_df['Close'].values
             highs = gbpjpy_df['High'].values
             lows = gbpjpy_df['Low'].values
             
             ema_50 = gbpjpy_df['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
-            ema_200 = gbpjpy_df['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            span_macro = 200 if len(gbpjpy_df) >= 200 else len(gbpjpy_df)
+            ema_200 = gbpjpy_df['Close'].ewm(span=span_macro, adjust=False).mean().iloc[-1]
             
             # 24-hour breakout
             lookback = 24

@@ -27,8 +27,8 @@ def is_in_danger_zone():
         now_utc = datetime.now(timezone.utc)
         
         for event in news_data:
-            # We only care about High impact news for major pairs
-            if event.get('impact') == 'High' and event.get('country') in ['USD', 'EUR', 'GBP']:
+            # We only care about High impact news for our traded currencies: USD, EUR, GBP, JPY
+            if event.get('impact') == 'High' and event.get('country') in ['USD', 'EUR', 'GBP', 'JPY']:
                 # The feed provides time in "M-D-YYYY H:MMam/pm" format (usually EST/EDT)
                 # But this specific feed (FairEconomy) is already converted to UTC or follows a standard
                 # We need to parse it. Format: "2026-05-08T12:30:00-04:00" or similar

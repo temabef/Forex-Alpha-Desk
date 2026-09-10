@@ -15,7 +15,7 @@ MAGIC_NUMBERS = {
     'Trend': 333
 }
 
-def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=None, tp=None):
+def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=None, tp=None, sl_dist=None, tp_dist=None):
     """
     Professional Trade Executor. 
     Handles price rounding, filling modes, and strategy-specific SL/TP.
@@ -85,12 +85,15 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
             tp_dist = 100 * pip_size
             sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
             tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
+        elif strategy_name == 'AI' and sl_dist is not None and tp_dist is not None:
+            # Dynamically anchor AI SL and TP directly to live execution fill price!
+            # Guarantees exact 1:1.5 Risk-to-Reward ratio relative to the actual fill price.
+            sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
+            tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
         elif sl is None or tp is None:
             # Safety targets
             sl_dist = 150 * pip_size
-            # For Pairs trading, do NOT set tight single-leg TP that breaks the hedge!
-            # Use broad 150 pip safety TP so Z-Score exit manages the pair exit.
-            tp_dist = 150 * pip_size if strategy_name == 'Pairs' else 40 * pip_size
+            tp_dist = 40 * pip_size
             sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
             tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
     else:

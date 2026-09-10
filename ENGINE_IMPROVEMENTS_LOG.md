@@ -22,6 +22,11 @@ This document maintains a chronological record of all architectural upgrades, bu
    - **5k Account**: `LOT_SIZE_AI = 0.08`, `LOT_SIZE_TREND = 0.08`. Max risk per trade ~0.35% - 0.45%.
    - Total portfolio risk is calibrated for institutional FTMO $100k requirements, keeping daily drawdown far below the 4-5% threshold.
 
+4. **Dynamic Fill-Price Anchoring for AI Quant Trades**:
+   - **Problem**: Previously, AI Stop Loss and Take Profit levels were calculated relative to the past H1 candle close (`asset_df['Close'].iloc[-1]`). Because the Task Scheduler executes at XX:21 (21 minutes past the hour), price movement during those 21 minutes distorted the fill-relative distances (e.g. producing 19-pip TP and 62-pip SL on USDJPY).
+   - **Fix**: Updated `get_current_signal.py` to calculate dynamic target distances (`dynamic_sl`, `dynamic_tp = dynamic_sl * 1.5`) and pass `sl_dist` and `tp_dist` directly to `mt5_executor.py`. `execute_mt5_trade()` now anchors SL and TP directly to the **live execution fill price (`price`)** at the exact millisecond the order fills.
+   - **Impact**: Guarantees an exact, uncompromised **1 : 1.5 Risk-to-Reward ratio** for every AI trade relative to the actual fill price.
+
 ---
 
 ### 2026-09-10: Multi-Terminal MT5 Synchronization & Tick Resampling Optimization

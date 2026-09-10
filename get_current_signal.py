@@ -315,12 +315,18 @@ async def get_signal():
                         
                     icon = "🚀" if prediction == 1 else "📉"
                     
+                    # Fetch live tick price for exact fill-anchoring
+                    suffix = os.getenv("SYMBOL_SUFFIX", "")
+                    broker_asset = f"{asset}{suffix}"
+                    live_tick = mt5.symbol_info_tick(broker_asset)
+                    execution_price = (live_tick.ask if prediction == 1 else live_tick.bid) if live_tick else current_price
+                    
                     if prediction == 1: # UP
-                        tp_level = current_price + dynamic_tp
-                        sl_level = current_price - dynamic_sl
+                        tp_level = execution_price + dynamic_tp
+                        sl_level = execution_price - dynamic_sl
                     else: # DOWN
-                        tp_level = current_price - dynamic_tp
-                        sl_level = current_price + dynamic_sl
+                        tp_level = execution_price - dynamic_tp
+                        sl_level = execution_price + dynamic_sl
                     
                     # --- PIP CALCULATION (JPY vs Normal) ---
                     pip_multiplier = 100 if "JPY" in asset else 10000
@@ -353,7 +359,7 @@ async def get_signal():
                             f"Asset: `{asset}`\n"
                             f"Prediction: `{direction}`\n"
                             f"Confidence: `{probability*100:.1f}%`\n"
-                            f"Price: `{current_price:{p_fmt}}`\n\n"
+                            f"Price: `{execution_price:{p_fmt}}`\n\n"
                             f"🎯 *Adaptive Targets:* \n"
                             f"TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
                             f"SL: `{sl_level:{p_fmt}}` (~{sl_pips} pips)\n\n"
@@ -361,8 +367,8 @@ async def get_signal():
                         )
                         log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
                         await send_telegram_msg(ml_report)
-                        # Safe volume for $10k Prop Account
-                        execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level)
+                        # Execute with fill-price anchored SL and TP (exact 1:1.5 R:R)
+                        execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level, sl_dist=dynamic_sl, tp_dist=dynamic_tp)
                     else:
                         print(f"AI: {asset} position already open. Skipping.")
                 else:

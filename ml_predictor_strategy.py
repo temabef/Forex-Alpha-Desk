@@ -83,7 +83,7 @@ def get_ml_prediction(df):
     # 1. Prepare features
     data = prepare_features(df)
     
-    if len(data) < 300: # Need more data for proper training & validation
+    if len(data) < 40: # Need at least 40 bars for feature window and validation
         return None, 0.0, 0.0
 
     features = [
@@ -92,12 +92,14 @@ def get_ml_prediction(df):
         'hour_sin', 'hour_cos', 'hl_range', 'body_ratio'
     ]
     
-    # 2. Walk-Forward Validation (Test on last 100 historical bars)
+    # 2. Walk-Forward Validation
     # We exclude the very last 4 rows from ANY training/testing as targets are unknown
     historical_data = data.iloc[:-4]
     
-    train_wf = historical_data.iloc[:-100]
-    test_wf = historical_data.iloc[-100:]
+    # Adaptive split: 80% train, 20% test
+    test_size = max(10, int(len(historical_data) * 0.2))
+    train_wf = historical_data.iloc[:-test_size]
+    test_wf = historical_data.iloc[-test_size:]
     
     model_wf = GradientBoostingClassifier(n_estimators=200, max_depth=3, learning_rate=0.05, subsample=0.8, random_state=42)
     model_wf.fit(train_wf[features], train_wf['target'])

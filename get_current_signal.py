@@ -89,8 +89,8 @@ def fetch_mt5_data(symbol, num_bars=1500):
     # --- FALLBACK: If copy_rates fails, fetch ticks and resample to H1 candles ---
     print(f"Rates fetch failed for {broker_symbol}, attempting tick resampling fallback...")
     try:
-        now = datetime.now()
-        past = now - timedelta(days=14)
+        now = datetime.utcnow()
+        past = now - timedelta(days=5)
         ticks = mt5.copy_ticks_range(broker_symbol, past, now, mt5.COPY_TICKS_ALL)
         if ticks is not None and len(ticks) > 0:
             df_ticks = pd.DataFrame(ticks)

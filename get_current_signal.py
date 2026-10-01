@@ -24,7 +24,7 @@ import json
 from dotenv import load_dotenv
 import MetaTrader5 as mt5
 
-from mt5_executor import execute_mt5_trade, get_mt5_active_positions, close_all_active_positions
+from mt5_executor import execute_mt5_trade, get_mt5_active_positions, close_all_active_positions, apply_ai_breakeven_stops, get_ai_position_info
 from news_manager import is_in_danger_zone
 
 # Load secrets from .env file
@@ -37,14 +37,15 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", 0.60))
 LOT_SIZE_AI = float(os.getenv("LOT_SIZE_AI", 0.08))
 LOT_SIZE_TREND = float(os.getenv("LOT_SIZE_TREND", 0.08))
+os.makedirs("logs", exist_ok=True)
 
 def log_to_file(message):
+    os.makedirs("logs", exist_ok=True)
     with open("logs/signal_history.txt", "a", encoding="utf-8") as f:
         f.write(message + "\n")
 
 async def send_telegram_msg(message):
-    if TELEGRAM_CHAT_ID == "PASTE_YOUR_CHAT_ID_HERE":
-        print(" Telegram Chat ID not set. Skipping notification.")
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID == "PASTE_YOUR_CHAT_ID_HERE":
         return
     try:
         bot = Bot(token=TELEGRAM_TOKEN)
@@ -69,7 +70,8 @@ def fetch_mt5_data(symbol, num_bars=1500):
     # Ensure symbol is selected in Market Watch
     mt5.symbol_select(broker_symbol, True)
         
-    rates = mt5.copy_rates_from_pos(broker_symbol, mt5.TIMEFRAME_H1, 0, num_bars)
+    # Fetch Bar 1 (start_pos = 1) to evaluate confirmed closed candles and avoid intra-bar repainting/divergence
+    rates = mt5.copy_rates_from_pos(broker_symbol, mt5.TIMEFRAME_H1, 1, num_bars)
     if rates is not None and len(rates) > 0:
         df = pd.DataFrame(rates)
         df['time'] = pd.to_datetime(df['time'], unit='s')
@@ -95,14 +97,52 @@ def fetch_mt5_data(symbol, num_bars=1500):
             df_ticks.set_index('time', inplace=True)
             df = df_ticks['bid'].resample('1h').ohlc().dropna()
             df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
-            if len(df) > 0:
-                print(f"Fallback SUCCESS for {broker_symbol}: Resampled {len(df)} H1 bars from ticks.")
+            if len(df) > 1:
+                # Drop the unclosed forming candle to match start_pos=1
+                df = df.iloc[:-1]
+                print(f"Fallback SUCCESS for {broker_symbol}: Resampled {len(df)} closed H1 bars from ticks.")
                 return df
     except Exception as e:
         print(f"Tick fallback error for {broker_symbol}: {e}")
 
     print(f"Failed to fetch data for {broker_symbol}")
     return None
+
+def calculate_adx(df, period=14):
+    """
+    Calculates Welles Wilder's Average Directional Index (ADX).
+    ADX >= 25 indicates strong directional trend momentum.
+    ADX < 20 indicates weak trend / consolidation / chop.
+    """
+    if df is None or len(df) < period * 2:
+        return 0.0
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    
+    pos_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=df.index)
+    neg_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=df.index)
+    
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
+    smooth_pos = pos_dm.ewm(alpha=1/period, adjust=False).mean()
+    smooth_neg = neg_dm.ewm(alpha=1/period, adjust=False).mean()
+    
+    pos_di = 100 * (smooth_pos / np.where(atr == 0, 1e-9, atr))
+    neg_di = 100 * (smooth_neg / np.where(atr == 0, 1e-9, atr))
+    
+    di_sum = pos_di + neg_di
+    di_diff = (pos_di - neg_di).abs()
+    dx = 100 * (di_diff / np.where(di_sum == 0, 1e-9, di_sum))
+    adx = dx.ewm(alpha=1/period, adjust=False).mean()
+    return float(adx.iloc[-1])
 
 def check_daily_drawdown():
     """
@@ -223,12 +263,23 @@ async def get_signal():
         await send_telegram_msg(f" *NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
         return
 
-    # --- SHIELD 4: AI TRADE EXPIRATION CLOSE (4-HOUR MAX HOLD) ---
+    # --- SHIELD 4: AI 80% BREAKEVEN LOCK ---
     try:
-        from mt5_executor import close_expired_ai_positions
-        close_expired_ai_positions()
+        be_updates = apply_ai_breakeven_stops(progress_threshold=0.80)
+        for be in be_updates:
+            msg = (
+                f"🛡️ *AI Breakeven Lock Activated*\n"
+                f"Asset: `{be['symbol']}` ({be['type']})\n"
+                f"Ticket: `{be['ticket']}`\n"
+                f"Progress: `{be['progress_pct']:.1f}%` of TP target\n"
+                f"New SL: `{be['new_sl']}` (Entry: `{be['entry']}`)\n"
+                f"*Trade is now 100% Risk-Free!*"
+            )
+            print(f"🛡️ Breakeven activated for {be['symbol']} (Ticket {be['ticket']})")
+            log_to_file(f"BREAKEVEN: {be['symbol']} {be['type']} moved SL to {be['new_sl']} (Risk-Free)")
+            await send_telegram_msg(msg)
     except Exception as e:
-        print(f" Error running expired AI close: {e}")
+        print(f" Error checking AI breakeven stops: {e}")
 
     # --- SYMBOL CONFIG ---
     symbols = ["EURUSD", "GBPUSD", "USDJPY", "GBPJPY"]
@@ -282,8 +333,8 @@ async def get_signal():
                 recent_24 = asset_df.tail(24)
                 atr = (recent_24['High'] - recent_24['Low']).mean()
                 
-                # Realistic ATR multiplier for 4-hour holding window (1.2x ATR instead of 3.5x)
-                dynamic_sl = atr * 1.2
+                # Realistic ATR multiplier for open-ended holding window (2.5x ATR)
+                dynamic_sl = atr * 2.5
                 
                 # Enforce pair-specific minimum safety SL (20 pips for JPY, 15 pips for EURUSD/GBPUSD)
                 pip_size = 0.01 if "JPY" in asset else 0.0001
@@ -333,27 +384,36 @@ async def get_signal():
                     tp_pips = int(dynamic_tp * pip_multiplier)
                     sl_pips = int(dynamic_sl * pip_multiplier)
 
-                    # --- CHECK ACTIVE POSITIONS & COOLDOWN FOR THIS STRATEGY ---
-                    active_positions = get_mt5_active_positions(strategy_name='AI')
+                    # --- CHECK ACTIVE AI POSITIONS & REVERSAL LOGIC ---
+                    ai_pos_info = get_ai_position_info(symbol=asset)
+                    signal_pos_type = 'BUY' if prediction == 1 else 'SELL'
+                    p_fmt = ".2f" if "JPY" in asset else ".5f"
                     
-                    # Check 1-Hour Post-Expiration Cooldown
-                    cooldown_file = f"logs/ai_cooldown_{asset.upper()}.json"
-                    if os.path.exists(cooldown_file):
-                        try:
-                            with open(cooldown_file, "r") as cf:
-                                data = json.load(cf)
-                                last_exit_time = data.get("timestamp", 0)
-                                if datetime.now().timestamp() - last_exit_time < 3600: # 60 minutes
-                                    remaining_m = int((3600 - (datetime.now().timestamp() - last_exit_time)) / 60)
-                                    log_to_file(f"AI ({asset}): Post-expiration 1-hour cooldown active ({remaining_m}m remaining). Skipping re-entry.")
-                                    print(f"AI ({asset}): Post-expiration 1-hour cooldown active ({remaining_m}m remaining). Skipping re-entry.")
-                                    continue
-                        except Exception as e:
-                            pass
-
-                    if not any(pos.upper() == asset.upper() for pos in active_positions):
-                        # Format based on JPY
-                        p_fmt = ".2f" if "JPY" in asset else ".5f"
+                    if asset.upper() in ai_pos_info:
+                        existing_pos = ai_pos_info[asset.upper()]
+                        current_pos_type = existing_pos['type'] # 'BUY' or 'SELL'
+                        
+                        if current_pos_type == signal_pos_type:
+                            log_to_file(f"AI ({asset}): Holding existing {current_pos_type} position (Confidence: {probability*100:.1f}%).")
+                            print(f"AI ({asset}): Holding existing {current_pos_type} position (Confidence: {probability*100:.1f}%).")
+                        else:
+                            # Confirmed Early Reversal Exit!
+                            log_to_file(f"AI REVERSAL: Confirmed reversal for {asset} ({current_pos_type} -> {signal_pos_type}, Conf: {probability*100:.1f}%).")
+                            print(f"AI REVERSAL: Exiting {current_pos_type} on {asset} and reversing to {signal_pos_type}!")
+                            reversal_msg = (
+                                f"🔄 *AI Early Reversal Triggered*\n"
+                                f"Asset: `{asset}`\n"
+                                f"Closed: `{current_pos_type}` (Ticket: `{existing_pos['ticket']}`)\n"
+                                f"New Signal: `{direction}` ({probability*100:.1f}% confidence)\n"
+                                f"Target TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
+                                f"Action: Reversing to `{signal_pos_type}`"
+                            )
+                            await send_telegram_msg(reversal_msg)
+                            # 1. Close existing opposite position
+                            execute_mt5_trade('AI', 'EXIT', symbol=asset)
+                            # 2. Enter new reversed position
+                            execute_mt5_trade('AI', signal_pos_type, symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level, sl_dist=dynamic_sl, tp_dist=dynamic_tp)
+                    else:
                         ml_report = (
                             f"{icon} *Quant Predictor (Adaptive AI)*\n"
                             f"Asset: `{asset}`\n"
@@ -368,9 +428,7 @@ async def get_signal():
                         log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")
                         await send_telegram_msg(ml_report)
                         # Execute with fill-price anchored SL and TP (exact 1:1.5 R:R)
-                        execute_mt5_trade('AI', 'BUY' if prediction == 1 else 'SELL', symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level, sl_dist=dynamic_sl, tp_dist=dynamic_tp)
-                    else:
-                        print(f"AI: {asset} position already open. Skipping.")
+                        execute_mt5_trade('AI', signal_pos_type, symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level, sl_dist=dynamic_sl, tp_dist=dynamic_tp)
                 else:
                     log_to_file(f"AI ({asset}): Confidence low ({probability*100:.1f}%). Threshold: {ML_CONFIDENCE_THRESHOLD*100}%. Waiting.")
                     print(f"AI ({asset}): Low confidence ({probability*100:.1f}%). Waiting.")
@@ -445,28 +503,31 @@ async def get_signal():
             
             current_close = closes[-1]
             
-            print(f"Close: {current_close:.3f} | Upper 24h: {upper_channel:.3f} | Lower 24h: {lower_channel:.3f}")
-            print(f"EMA-50: {ema_50:.3f} | EMA-200: {ema_200:.3f}")
+            # ADX Momentum Filter: Require ADX >= 25 to ensure strong trend momentum and filter consolidation chop
+            adx_val = calculate_adx(gbpjpy_df, period=14)
             
-            if current_close > upper_channel and ema_50 > ema_200:
+            print(f"Close: {current_close:.3f} | Upper 24h: {upper_channel:.3f} | Lower 24h: {lower_channel:.3f}")
+            print(f"EMA-50: {ema_50:.3f} | EMA-200: {ema_200:.3f} | ADX(14): {adx_val:.1f}")
+            
+            if current_close > upper_channel and ema_50 > ema_200 and adx_val >= 25.0:
                 if not any(pos.upper() == asset for pos in active_positions):
-                    report = f"📈 *SIGNAL: THE BEAST (LONG)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: 50 pips (Live Fill)\nTP: 100 pips (Live Fill)"
-                    log_to_file(f"Swing: {asset} LONG Signal Sent")
+                    report = f"📈 *SIGNAL: THE BEAST (LONG)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nADX: `{adx_val:.1f}`\nSL: 50 pips (Live Fill)\nTP: 100 pips (Live Fill)"
+                    log_to_file(f"Swing: {asset} LONG Signal Sent (ADX={adx_val:.1f})")
                     await send_telegram_msg(report)
                     execute_mt5_trade('Swing', 'BUY', symbol=asset, volume=LOT_SIZE_TREND)
                 else:
                     print(f"Swing: {asset} position already open.")
-            elif current_close < lower_channel and ema_50 < ema_200:
+            elif current_close < lower_channel and ema_50 < ema_200 and adx_val >= 25.0:
                 if not any(pos.upper() == asset for pos in active_positions):
-                    report = f"🔴 *SIGNAL: THE BEAST (SHORT)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nSL: 50 pips (Live Fill)\nTP: 100 pips (Live Fill)"
-                    log_to_file(f"Swing: {asset} SHORT Signal Sent")
+                    report = f"🔴 *SIGNAL: THE BEAST (SHORT)*\nAsset: `{asset}`\nEntry: `{current_close:.3f}`\nADX: `{adx_val:.1f}`\nSL: 50 pips (Live Fill)\nTP: 100 pips (Live Fill)"
+                    log_to_file(f"Swing: {asset} SHORT Signal Sent (ADX={adx_val:.1f})")
                     await send_telegram_msg(report)
                     execute_mt5_trade('Swing', 'SELL', symbol=asset, volume=LOT_SIZE_TREND)
                 else:
                     print(f"Swing: {asset} position already open.")
             else:
-                log_to_file(f"Swing ({asset}): WAIT - No breakout. Close={current_close:.3f} Upper={upper_channel:.3f} Lower={lower_channel:.3f} EMA50={ema_50:.3f} EMA200={ema_200:.3f}")
-                print(f"RECOMMENDATION: WAIT (No breakout or against macro trend)")
+                log_to_file(f"Swing ({asset}): WAIT - No breakout or weak trend. Close={current_close:.3f} Upper={upper_channel:.3f} Lower={lower_channel:.3f} EMA50={ema_50:.3f} EMA200={ema_200:.3f} ADX={adx_val:.1f}")
+                print(f"RECOMMENDATION: WAIT (No breakout, against macro trend, or ADX < 25 [ADX={adx_val:.1f}])")
         else:
             log_to_file(f"Swing ({asset}): SKIPPED - Not enough data ({len(gbpjpy_df)} bars)")
             print(f"SKIPPING Strategy 4: Not enough data for {asset}.")

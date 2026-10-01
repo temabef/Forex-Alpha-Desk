@@ -7,6 +7,45 @@ This document maintains a chronological record of all architectural upgrades, bu
 
 ## 📅 Chronological Change Log
 
+### 2026-09-30: 80% Breakeven Lock Threshold & ADX Trend Gate on GBPJPY
+
+1. **Refined Breakeven Lock from 70% to 80% (`apply_ai_breakeven_stops`)**:
+   - **Reason**: Live trade audit of September 23–26 revealed that setting the threshold to 70% was prematurely truncating winning trades during mid-expansion pullbacks (e.g. EURUSD on 5K was stopped out at +1.2 pips for +$0.59, missing a +35 pip drop to full TP that 10K captured for +$52.56).
+   - **Fix**: Adjusted the trigger threshold across all three desks (`Desk-5k`, `Desk-10k`, and `Desk-JPY`) from `0.70` to `0.80`. Trades now have wider breathing room through standard 10–15 pip retests and only lock to Breakeven (+1 pip) during late-stage moves toward TP.
+
+2. **Added 14-Period ADX Momentum Filter to Strategy 2 (GBPJPY Breakout)**:
+   - **Reason**: Performance analysis showed GBPJPY suffered consecutive stop-outs (-$89.90 on 10K) when taking breakouts during low-volatility consolidation ranges where 24-hour channel extremes were poked by minor wicks.
+   - **Fix**: Implemented Welles Wilder's `calculate_adx(gbpjpy_df, period=14)` in `get_current_signal.py`. Gated both BUY and SELL breakout executions with `adx_val >= 25.0`. When `ADX < 25`, breakout signals are safely filtered out, preventing chop and false-break losses while preserving execution during true trending expansions.
+
+---
+
+### 2026-09-15: AI Quant Strategy Risk Re-alignment
+
+1. **Widened AI Quant Stop Loss (1.2x ATR ➔ 2.5x ATR)**:
+   - **Reason**: Following the September 14th removal of the 4-hour time stop, holding trades open indefinitely with a tight 1.2x ATR Stop Loss resulted in premature stop-outs from normal intraday market noise. To allow trades to develop naturally toward their 1:1.5 R:R targets without time constraints, they require standard "breathing room".
+   - **Fix**: Updated `dynamic_sl` multiplier in `get_current_signal.py` from `1.2` to `2.5`. This protects trades against structural reversals while providing enough leeway to survive standard intraday pullbacks.
+
+---
+
+### 2026-09-14: Deployment of Approach 2 (Pure SL/TP, 70% Breakeven Lock & Early Reversal Exit)
+
+1. **Retirement of Naive 4-Hour Time-Based Cutoff & 1-Hour Cooldown**:
+   - **Problem**: Analysis of live execution revealed that the fixed 4-hour age cutoff (`close_expired_ai_positions`) prematurely truncated winning trades (e.g., closing USDJPY at +27 pips when only 20 pips away from the 47-pip TP target). The subsequent 1-hour cooldown locked the desk out, after which the model re-entered the exact same trend at a worse price, incurring double spread and execution commission fees.
+   - **Fix**: Retired the arbitrary 4-hour time stop in `mt5_executor.py` and `get_current_signal.py`. Deactivated the 1-hour post-expiration re-entry cooldown. Trades now develop naturally towards their calculated 1:1.5 Risk-to-Reward targets.
+
+2. **Automated 70% Progress Breakeven Stop-Loss Lock (`apply_ai_breakeven_stops`)**:
+   - **Mechanism**: Every hourly cycle, the engine inspects all active AI positions (`magic=111`). When a position achieves **>= 70% progress towards its Take Profit** (`(price - entry) / (tp - entry) >= 0.70`), the engine automatically modifies the Stop Loss in MT5 to `Entry Price ± 1 pip`.
+   - **Advantage Over Tight Breakeven**: Setting the threshold to 70% rather than 30-50% protects winning trades from premature stop-outs during standard 10-15 pip market retests/pullbacks, while guaranteeing that any trade reaching the late expansion phase becomes 100% risk-free.
+
+3. **High-Confidence Early Reversal Exit**:
+   - **Mechanism**: If an AI position is already open and a new hourly cycle generates a high-confidence signal in the **OPPOSITE direction** (`probability >= ML_CONFIDENCE_THRESHOLD`) confirmed by the 20 EMA trend filter, the engine executes an immediate market exit (`execute_mt5_trade('AI', 'EXIT', symbol=asset)`), dispatches a Telegram alert, and opens the new reversed position.
+   - **Impact**: Provides an intelligent, signal-driven exit without holding positions against confirmed macro reversals.
+
+4. **Synchronized Multi-Desk Deployment**:
+   - Applied and verified across both `Desk-5k` and `Desk-10k` with full MT5 IPC isolation.
+
+---
+
 ### 2026-09-10: Strategic Transition to Multi-Pair AI Desk (Path 2) & Z-Score Retirement
 
 1. **Retirement of Strategy 1 (Z-Score Pairs Arbitrage)**:
@@ -58,6 +97,21 @@ This document maintains a chronological record of all architectural upgrades, bu
    - **Problem**: MT5 terminal memory buffers (`copy_rates_from_pos`) on Windows sometimes return stale/cached candle history if the terminal chart window buffer hasn't refreshed, causing Z-score or breakout calculations to lag between accounts.
    - **Fix**: Updated `fetch_mt5_data()` in `get_current_signal.py` to check the timestamp of the latest bar returned. If the data is older than 2.5 hours, it automatically flags the data as STALE and triggers the **live tick resampling fallback** (`copy_ticks_range` resampled to H1 DataFrames).
    - **Impact**: Guarantees 100% live, synchronized data across both 5k and 10k accounts every hour.
+
+---
+
+### 2026-09-21: Bar 1 (Closed Candle) Evaluation & Schedule Alignment
+
+1. **Closed Candle Ingestion (`start_pos = 1`)**:
+   - **Problem**: Previously, `fetch_mt5_data()` fetched candles starting from `start_pos = 0` (the currently forming, unclosed H1 candle). Because Desk-5k ran at `:20` and Desk-10k ran at `:22`, the two desks evaluated different intra-candle ticks. Single-tick price shifts caused non-linear probability jumps in `GradientBoostingClassifier` (e.g. USDJPY confidence leaping from 56.4% to 70.0% in 2 minutes), causing one account to trade while the other sat out.
+   - **Fix**: Updated `copy_rates_from_pos` to `start_pos = 1` across all data fetches, ensuring the engine exclusively evaluates confirmed, fully closed H1 bars. In the tick resampling fallback, dropped the current forming candle (`df.iloc[:-1]`).
+   - **Impact**: Guarantees 100% data parity and deterministic signals across all desks, eliminates covariate shift (model was trained on closed bars), and prevents false breakout wicks in Strategy 4.
+
+2. **Automation Timing Alignment (`XX:01` & `XX:02`)**:
+   - **Fix**: Updated `setup_automation.bat` and active Windows Task Scheduler entries:
+     - `Forex-Bot-5k`: Runs hourly at `XX:01` (1 minute after candle close).
+     - `Forex-Bot-10k`: Runs hourly at `XX:02` (2 minutes after candle close).
+   - **Impact**: Evaluates the newly closed candle immediately upon hour completion and enters trades at the open of the new bar with zero lag.
 
 ---
 

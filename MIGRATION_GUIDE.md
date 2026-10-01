@@ -34,9 +34,8 @@ Because `.env` files contain sensitive API keys and secrets, they are intentiona
    TELEGRAM_TOKEN=your_token_here
    TELEGRAM_CHAT_ID=your_chat_id_here
    MT5_TERMINAL_PATH=C:\Program Files\Your MT5 Terminal\terminal64.exe
-   LOT_SIZE_AI=0.05
-   LOT_SIZE_PAIRS=0.02
-   LOT_SIZE_TREND=0.04
+   LOT_SIZE_AI=0.08
+   LOT_SIZE_TREND=0.08
    SYMBOL_SUFFIX=.x
    ENABLE_NEWS_FILTER=True
    ENABLE_FRIDAY_EXIT=False

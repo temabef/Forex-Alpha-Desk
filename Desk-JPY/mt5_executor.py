@@ -8,21 +8,17 @@ load_dotenv()
 # Path to your MT5 terminal (Dynamic via .env for multi-account setup)
 TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 
-# Magic Numbers for Strategy Isolation
+# Magic Numbers for Desk-JPY Strategy Isolation (444 for AI)
 MAGIC_NUMBERS = {
-    'AI': 111,
-    'Pairs': 222,
-    'Trend': 333,
-    # Preserve the legacy fallback ID already used by live Swing positions.
-    'Swing': 123456
+    'AI': 444,
 }
 
-def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=None, tp=None, sl_dist=None, tp_dist=None):
+def execute_mt5_trade(strategy_name, action, symbol="USDJPY", volume=0.06, sl=None, tp=None, sl_dist=None, tp_dist=None):
     """
-    Professional Trade Executor. 
+    Professional Trade Executor for Desk-JPY. 
     Handles price rounding, filling modes, and strategy-specific SL/TP.
     """
-    magic = MAGIC_NUMBERS.get(strategy_name, 123456)
+    magic = MAGIC_NUMBERS.get(strategy_name, 444)
     
     if not mt5.initialize(path=TERMINAL_PATH):
         print("MT5 initialize() failed")
@@ -81,173 +77,88 @@ def execute_mt5_trade(strategy_name, action, symbol="EURUSD", volume=0.2, sl=Non
     # 5. Handle SL/TP (Smart vs Emergency Backup)
     if action != 'EXIT':
         pip_size = 0.01 if "JPY" in symbol else 0.0001
-        if strategy_name == 'Swing':
-            # Always anchor GBPJPY Swing SL/TP to live fill price: 50 pips SL, 100 pips TP
-            sl_dist = 50 * pip_size
-            tp_dist = 100 * pip_size
-            sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
-            tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
-        elif strategy_name == 'AI' and sl_dist is not None and tp_dist is not None:
-            # Dynamically anchor AI SL and TP directly to live execution fill price!
-            # Guarantees exact 1:1.5 Risk-to-Reward ratio relative to the actual fill price.
+        if strategy_name == 'AI' and sl_dist is not None and tp_dist is not None:
             sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
             tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
         elif sl is None or tp is None:
-            # Safety targets
-            sl_dist = 150 * pip_size
-            tp_dist = 40 * pip_size
+            sl_dist = 40 * pip_size
+            tp_dist = 60 * pip_size
             sl = price - sl_dist if order_type == mt5.ORDER_TYPE_BUY else price + sl_dist
             tp = price + tp_dist if order_type == mt5.ORDER_TYPE_BUY else price - tp_dist
+
+    # 6. Build Request
+    if action == 'EXIT':
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": broker_symbol,
+            "volume": float(strategy_pos.volume),
+            "type": order_type,
+            "position": int(strategy_pos.ticket),
+            "price": float(price),
+            "deviation": 20,
+            "magic": magic,
+            "comment": f"Desk-JPY Close {strategy_name}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": filling_type,
+        }
     else:
-        sl = 0.0
-        tp = 0.0
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": broker_symbol,
+            "volume": float(volume),
+            "type": order_type,
+            "price": float(price),
+            "sl": float(round(sl, symbol_info.digits)) if sl else 0.0,
+            "tp": float(round(tp, symbol_info.digits)) if tp else 0.0,
+            "deviation": 20,
+            "magic": magic,
+            "comment": f"Desk-JPY {strategy_name}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": filling_type,
+        }
 
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": broker_symbol,
-        "volume": float(volume) if action != 'EXIT' else float(strategy_pos.volume),
-        "type": int(order_type),
-        "price": float(price),
-        "sl": round(float(sl), symbol_info.digits) if sl else 0.0,
-        "tp": round(float(tp), symbol_info.digits) if tp else 0.0,
-        "magic": int(magic),
-        "comment": f"{strategy_name} Trade",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": int(filling_type),
-    }
-
-    if action == 'EXIT' and strategy_pos:
-        request["position"] = strategy_pos.ticket
-
-    print(f"MT5: Sending {action} for {symbol} (SL: {sl}, TP: {tp})")
+    # 7. Send Order
     result = mt5.order_send(request)
-    
-    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-        print(f"MT5 Order Failed: {result.comment if result else 'Unknown'}")
+    if result is None:
+        print(f"MT5: order_send returned None for {strategy_name} {action}")
+        return False
+        
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"MT5: Order Failed! Retcode: {result.retcode}, Comment: {result.comment}")
         return False
 
-    # --- CRITICAL FIX: ENSURE SL/TP ARE APPLIED (Two-Step for Prop Brokers) ---
-    if action != 'EXIT' and (sl or tp):
-        # We wait a split second for the position to be recognized
-        import time
-        time.sleep(0.1)
-        
-        # Get the ticket of the position we just opened
-        # We search by magic number to find the exact trade
-        positions = mt5.positions_get(symbol=broker_symbol)
-        new_pos = None
-        if positions:
-            for p in positions:
-                if p.magic == magic:
-                    new_pos = p
-                    break
-        
-        if new_pos:
-            modify_request = {
-                "action": mt5.TRADE_ACTION_SLTP,
-                "symbol": broker_symbol,
-                "position": new_pos.ticket,
-                "sl": round(float(sl), symbol_info.digits) if sl else 0.0,
-                "tp": round(float(tp), symbol_info.digits) if tp else 0.0,
-            }
-            modify_result = mt5.order_send(modify_request)
-            if modify_result.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"⚠️ MT5: Failed to modify SL/TP safety net: {modify_result.comment}")
-            else:
-                print(f"✅ MT5: SL/TP Safety Net applied successfully to ticket {new_pos.ticket}")
-
+    print(f"MT5: Trade SUCCESS! {action} {volume} {broker_symbol} @ {price}")
     return True
 
-def get_mt5_active_positions(strategy_name=None):
+def get_mt5_active_positions(strategy_name='AI'):
     """
-    Returns a list of symbols that have active positions for a specific strategy.
+    Returns a list of symbols for which the specified strategy has an active position.
     """
+    magic = MAGIC_NUMBERS.get(strategy_name, 444)
     if not mt5.initialize(path=TERMINAL_PATH):
         return []
         
     positions = mt5.positions_get()
-    if positions is None:
+    if not positions:
         return []
-    
-    magic = MAGIC_NUMBERS.get(strategy_name)
+        
     suffix = os.getenv("SYMBOL_SUFFIX", "")
-    
     active_symbols = []
     for p in positions:
-        if magic is None or p.magic == magic:
-            # Strip the suffix before returning to the main logic
+        if p.magic == magic:
             clean_symbol = p.symbol.replace(suffix, "") if suffix else p.symbol
             active_symbols.append(clean_symbol)
             
     return active_symbols
 
-def close_all_active_positions():
-    """
-    Emergency/Global exit function. Closes every single open position 
-    on the account regardless of strategy.
-    """
-    if not mt5.initialize(path=TERMINAL_PATH):
-        print("MT5: Failed to initialize for global exit")
-        return False
-        
-    positions = mt5.positions_get()
-    if not positions:
-        print("MT5: No active positions found for global exit.")
-        return True
-        
-    print(f"MT5: Attempting to close {len(positions)} positions...")
-    success = True
-    for p in positions:
-        # Determine order type to close
-        order_type = mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        tick = mt5.symbol_info_tick(p.symbol)
-        if not tick:
-            continue
-        price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
-        
-        # Get symbol properties for digits and filling mode
-        symbol_info = mt5.symbol_info(p.symbol)
-        if symbol_info is None:
-            continue
-            
-        filling_type = mt5.ORDER_FILLING_FOK
-        if symbol_info.filling_mode & 1: filling_type = mt5.ORDER_FILLING_FOK
-        elif symbol_info.filling_mode & 2: filling_type = mt5.ORDER_FILLING_IOC
-        else: filling_type = mt5.ORDER_FILLING_RETURN
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": p.symbol,
-            "volume": float(p.volume),
-            "type": int(order_type),
-            "position": p.ticket,
-            "price": float(price),
-            "magic": int(p.magic),
-            "comment": "Global Exit",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": int(filling_type),
-        }
-        
-        result = mt5.order_send(request)
-        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-            print(f"Failed to close position {p.ticket}: {result.comment if result else 'Unknown'}")
-            success = False
-        else:
-            print(f"Successfully closed position {p.ticket} ({p.symbol})")
-            
-    return success
-
 def get_ai_position_info(symbol=None):
     """
-    Returns dictionary of active AI positions (magic=111):
-    {
-        'USDJPY': {'ticket': 12345, 'type': 'BUY', 'price_open': 154.558, 'sl': 154.243, 'tp': 155.030, 'volume': 0.15, ...}
-    }
+    Returns detailed dictionary of active AI positions.
     """
-    magic = MAGIC_NUMBERS.get('AI', 111)
+    magic = MAGIC_NUMBERS.get('AI', 444)
     if not mt5.initialize(path=TERMINAL_PATH):
         return {}
-    
+        
     positions = mt5.positions_get()
     if not positions:
         return {}
@@ -275,12 +186,11 @@ def get_ai_position_info(symbol=None):
 
 def apply_ai_breakeven_stops(progress_threshold=0.80):
     """
-    Audits active AI positions (magic 111).
+    Audits active AI positions (magic 444).
     If a trade has progressed >= progress_threshold (default 70%) towards its TP target,
     moves the Stop Loss to Breakeven (entry price ± 1 pip) to make it 100% risk-free.
-    Returns list of modified position summaries: [{'symbol': 'USDJPY', 'ticket': 123, 'new_sl': 154.569}]
     """
-    magic = MAGIC_NUMBERS.get('AI', 111)
+    magic = MAGIC_NUMBERS.get('AI', 444)
     if not mt5.initialize(path=TERMINAL_PATH):
         print("MT5: Failed to initialize for breakeven check.")
         return []
@@ -306,7 +216,6 @@ def apply_ai_breakeven_stops(progress_threshold=0.80):
         is_buy = (p.type == mt5.ORDER_TYPE_BUY)
         current_price = tick.bid if is_buy else tick.ask
         
-        # Check if trade has a valid TP set
         if p.tp == 0.0:
             continue
             
@@ -317,10 +226,8 @@ def apply_ai_breakeven_stops(progress_threshold=0.80):
         if is_buy:
             profit_dist = current_price - p.price_open
             progress = profit_dist / total_target_dist
-            # Target breakeven: entry + 1 pip
             target_be_sl = round(p.price_open + (1.0 * pip_size), symbol_info.digits)
             
-            # If progress >= threshold and current SL is below breakeven
             if progress >= progress_threshold and p.sl < target_be_sl:
                 print(f"Breakeven trigger for {clean_symbol} BUY (Ticket {p.ticket}): Progress {progress*100:.1f}% >= {progress_threshold*100:.0f}%.")
                 request = {
@@ -342,15 +249,11 @@ def apply_ai_breakeven_stops(progress_threshold=0.80):
                         'new_sl': target_be_sl,
                         'tp': p.tp
                     })
-                else:
-                    print(f"FAILED to set breakeven for {clean_symbol}: {result.comment if result else 'Unknown'}")
         else: # SELL
             profit_dist = p.price_open - current_price
             progress = profit_dist / total_target_dist
-            # Target breakeven: entry - 1 pip
             target_be_sl = round(p.price_open - (1.0 * pip_size), symbol_info.digits)
             
-            # If progress >= threshold and current SL is above breakeven (or zero)
             if progress >= progress_threshold and (p.sl > target_be_sl or p.sl == 0.0):
                 print(f"Breakeven trigger for {clean_symbol} SELL (Ticket {p.ticket}): Progress {progress*100:.1f}% >= {progress_threshold*100:.0f}%.")
                 request = {
@@ -372,8 +275,55 @@ def apply_ai_breakeven_stops(progress_threshold=0.80):
                         'new_sl': target_be_sl,
                         'tp': p.tp
                     })
-                else:
-                    print(f"FAILED to set breakeven for {clean_symbol}: {result.comment if result else 'Unknown'}")
                     
     return modified_positions
 
+def close_all_active_positions():
+    """
+    Emergency procedure: Closes ALL open positions managed by Desk-JPY.
+    """
+    if not mt5.initialize(path=TERMINAL_PATH):
+        print("MT5: Failed to initialize for close_all.")
+        return False
+        
+    positions = mt5.positions_get()
+    if not positions:
+        return True
+        
+    jpy_magics = [MAGIC_NUMBERS['AI']]
+    for p in positions:
+        if p.magic in jpy_magics:
+            symbol_info = mt5.symbol_info(p.symbol)
+            if not symbol_info:
+                continue
+            filling_type = mt5.ORDER_FILLING_FOK
+            if symbol_info.filling_mode & 1: filling_type = mt5.ORDER_FILLING_FOK
+            elif symbol_info.filling_mode & 2: filling_type = mt5.ORDER_FILLING_IOC
+            else: filling_type = mt5.ORDER_FILLING_RETURN
+
+            tick = mt5.symbol_info_tick(p.symbol)
+            if not tick:
+                continue
+            price = tick.bid if p.type == mt5.ORDER_TYPE_BUY else tick.ask
+            order_type = mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": p.symbol,
+                "volume": float(p.volume),
+                "type": order_type,
+                "position": int(p.ticket),
+                "price": float(price),
+                "deviation": 20,
+                "magic": int(p.magic),
+                "comment": "Desk-JPY Emergency Close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling_type,
+            }
+            res = mt5.order_send(request)
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"Closed Desk-JPY position {p.ticket} for {p.symbol}")
+            else:
+                print(f"Failed to close position {p.ticket}: {res.comment if res else 'Unknown'}")
+                
+    return True

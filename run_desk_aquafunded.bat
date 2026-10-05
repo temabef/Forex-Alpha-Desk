@@ -1,4 +1,4 @@
 @echo off
-cd /d "%~dp0Desk-JPY"
+cd /d "%~dp0Desk-AquaFunded"
 set PYTHONIOENCODING=utf-8
 "C:\Users\skolawole\AppData\Local\Microsoft\WindowsApps\python.exe" get_current_signal.py

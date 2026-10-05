@@ -8,14 +8,14 @@ load_dotenv()
 # Path to your MT5 terminal (Dynamic via .env for multi-account setup)
 TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 
-# Magic Numbers for Desk-JPY Strategy Isolation (444 for AI)
+# Magic Numbers for Desk-AquaFunded Strategy Isolation (444 for AI)
 MAGIC_NUMBERS = {
     'AI': 444,
 }
 
 def execute_mt5_trade(strategy_name, action, symbol="USDJPY", volume=0.08, sl=None, tp=None, sl_dist=None, tp_dist=None):
     """
-    Professional Trade Executor for Desk-JPY. 
+    Professional Trade Executor for Desk-AquaFunded. 
     Handles price rounding, filling modes, and strategy-specific SL/TP.
     """
     magic = MAGIC_NUMBERS.get(strategy_name, 444)
@@ -97,7 +97,7 @@ def execute_mt5_trade(strategy_name, action, symbol="USDJPY", volume=0.08, sl=No
             "price": float(price),
             "deviation": 20,
             "magic": magic,
-            "comment": f"Desk-JPY Close {strategy_name}",
+            "comment": f"AquaFunded Close {strategy_name}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_type,
         }
@@ -112,7 +112,7 @@ def execute_mt5_trade(strategy_name, action, symbol="USDJPY", volume=0.08, sl=No
             "tp": float(round(tp, symbol_info.digits)) if tp else 0.0,
             "deviation": 20,
             "magic": magic,
-            "comment": f"Desk-JPY {strategy_name}",
+            "comment": f"AquaFunded {strategy_name}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_type,
         }
@@ -280,7 +280,7 @@ def apply_ai_breakeven_stops(progress_threshold=0.80):
 
 def close_all_active_positions():
     """
-    Emergency procedure: Closes ALL open positions managed by Desk-JPY.
+    Emergency procedure: Closes ALL open positions managed by Desk-AquaFunded.
     """
     if not mt5.initialize(path=TERMINAL_PATH):
         print("MT5: Failed to initialize for close_all.")
@@ -290,9 +290,9 @@ def close_all_active_positions():
     if not positions:
         return True
         
-    jpy_magics = [MAGIC_NUMBERS['AI']]
+    aqua_magics = [MAGIC_NUMBERS['AI']]
     for p in positions:
-        if p.magic in jpy_magics:
+        if p.magic in aqua_magics:
             symbol_info = mt5.symbol_info(p.symbol)
             if not symbol_info:
                 continue
@@ -316,13 +316,13 @@ def close_all_active_positions():
                 "price": float(price),
                 "deviation": 20,
                 "magic": int(p.magic),
-                "comment": "Desk-JPY Emergency Close",
+                "comment": "AquaFunded Emergency Close",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": filling_type,
             }
             res = mt5.order_send(request)
             if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-                print(f"Closed Desk-JPY position {p.ticket} for {p.symbol}")
+                print(f"Closed Desk-AquaFunded position {p.ticket} for {p.symbol}")
             else:
                 print(f"Failed to close position {p.ticket}: {res.comment if res else 'Unknown'}")
                 

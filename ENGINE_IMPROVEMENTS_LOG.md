@@ -7,11 +7,25 @@ This document maintains a chronological record of all architectural upgrades, bu
 
 ## 📅 Chronological Change Log
 
+### 2026-10-05: AquaFunded Desk Diversification & Architectural Migration (`Desk-AquaFunded`)
+
+1. **Desk Renaming & Architectural Rebranding**:
+   - Renamed `Desk-JPY` to `Desk-AquaFunded` across codebase, runners, automated unit tests, and Windows Task Scheduler (`Forex-Bot-AquaFunded`).
+   - Standardized desk naming convention to broker identity (`Desk-AquaFunded`) to reflect multi-asset operational capacity rather than single-currency dependency.
+
+2. **Multi-Asset Quant Diversification (`USDJPY`, `USDCAD`, `EURUSD`)**:
+   - Expanded asset universe on AquaFunded beyond single-pair `USDJPY` to include `USDCAD` (positive backtested alpha edge) and `EURUSD` (top-performing major).
+   - Re-calibrated lot sizing from `0.15` to **`0.08`** to distribute risk across concurrent positions while maintaining conservative daily drawdown limits.
+   - Expanded high-impact news filter to include `['USD', 'JPY', 'EUR', 'CAD']`.
+   - Calibrated dynamic ATR pip math with asset-specific floors (20 pips for 3-digit JPY, 15 pips for 5-digit majors).
+
+---
+
 ### 2026-09-30: 80% Breakeven Lock Threshold & ADX Trend Gate on GBPJPY
 
 1. **Refined Breakeven Lock from 70% to 80% (`apply_ai_breakeven_stops`)**:
    - **Reason**: Live trade audit of September 23–26 revealed that setting the threshold to 70% was prematurely truncating winning trades during mid-expansion pullbacks (e.g. EURUSD on 5K was stopped out at +1.2 pips for +$0.59, missing a +35 pip drop to full TP that 10K captured for +$52.56).
-   - **Fix**: Adjusted the trigger threshold across all three desks (`Desk-5k`, `Desk-10k`, and `Desk-JPY`) from `0.70` to `0.80`. Trades now have wider breathing room through standard 10–15 pip retests and only lock to Breakeven (+1 pip) during late-stage moves toward TP.
+   - **Fix**: Adjusted the trigger threshold across all three desks (`Desk-5k`, `Desk-10k`, and `Desk-AquaFunded`) from `0.70` to `0.80`. Trades now have wider breathing room through standard 10–15 pip retests and only lock to Breakeven (+1 pip) during late-stage moves toward TP.
 
 2. **Added 14-Period ADX Momentum Filter to Strategy 2 (GBPJPY Breakout)**:
    - **Reason**: Performance analysis showed GBPJPY suffered consecutive stop-outs (-$89.90 on 10K) when taking breakouts during low-volatility consolidation ranges where 24-hour channel extremes were poked by minor wicks.

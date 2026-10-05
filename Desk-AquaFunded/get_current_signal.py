@@ -177,11 +177,11 @@ async def get_signal():
         return
 
     print("=" * 60)
-    print("      NAUTILUS DESK-JPY (YEN ALPHA QUANT DESK)")
+    print("      NAUTILUS DESK-AQUAFUNDED (MULTI-ASSET QUANT DESK)")
     print(f"      Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Dry-Run: {DRY_RUN}")
     print("=" * 60)
 
-    log_to_file("--- Desk-JPY Live Signal Report ---")
+    log_to_file("--- Desk-AquaFunded Live Signal Report ---")
     log_to_file(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # --- SHIELD 1: DAILY DRAWDOWN KILL-SWITCH ---
@@ -189,7 +189,7 @@ async def get_signal():
     if is_breached:
         print(f"🛑 {breach_msg}")
         log_to_file(f"KILL-SWITCH: {breach_msg}")
-        await send_telegram_msg(f"🛑 *DESK-JPY EMERGENCY KILL-SWITCH*\n{breach_msg}")
+        await send_telegram_msg(f"🛑 *DESK-AQUAFUNDED EMERGENCY KILL-SWITCH*\n{breach_msg}")
         if not DRY_RUN:
             close_all_active_positions()
         return
@@ -198,7 +198,7 @@ async def get_signal():
     if is_friday_night():
         print("📅 Friday 20:00 GMT Reached. Closing all positions for the weekend.")
         log_to_file("FRIDAY EXIT: Closing all positions.")
-        await send_telegram_msg("📅 *DESK-JPY FRIDAY EXIT*\nClosing all positions for the weekend.")
+        await send_telegram_msg("📅 *DESK-AQUAFUNDED FRIDAY EXIT*\nClosing all positions for the weekend.")
         if not DRY_RUN:
             close_all_active_positions()
         return
@@ -208,7 +208,7 @@ async def get_signal():
     if in_danger:
         print(f"⚠️ {news_msg}")
         log_to_file(f"NEWS FILTER: {news_msg}")
-        await send_telegram_msg(f"⚠️ *DESK-JPY NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
+        await send_telegram_msg(f"⚠️ *DESK-AQUAFUNDED NEWS DANGER ZONE*\n{news_msg}\n\nExecution skipped for this hour.")
         return
 
     # --- SHIELD 4: AI 80% BREAKEVEN LOCK ---
@@ -217,7 +217,7 @@ async def get_signal():
             be_updates = apply_ai_breakeven_stops(progress_threshold=0.80)
             for be in be_updates:
                 msg = (
-                    f"🛡️ *Desk-JPY AI Breakeven Lock Activated*\n"
+                    f"🛡️ *Desk-AquaFunded AI Breakeven Lock Activated*\n"
                     f"Asset: `{be['symbol']}` ({be['type']})\n"
                     f"Ticket: `{be['ticket']}`\n"
                     f"Progress: `{be['progress_pct']:.1f}%` of TP target\n"
@@ -336,7 +336,7 @@ async def get_signal():
                             log_to_file(f"AI REVERSAL: Confirmed reversal for {asset} ({current_pos_type} -> {signal_pos_type}, Conf: {probability*100:.1f}%).")
                             print(f"🔄 AI REVERSAL: Exiting {current_pos_type} on {asset} and reversing to {signal_pos_type}!")
                             reversal_msg = (
-                                f"🔄 *Desk-JPY Early Reversal Triggered*\n"
+                                f"🔄 *Desk-AquaFunded Early Reversal Triggered*\n"
                                 f"Asset: `{asset}`\n"
                                 f"Closed: `{current_pos_type}` (Ticket: `{existing_pos['ticket']}`)\n"
                                 f"New Signal: `{direction}` ({probability*100:.1f}% confidence)\n"
@@ -349,7 +349,7 @@ async def get_signal():
                                 execute_mt5_trade('AI', signal_pos_type, symbol=asset, volume=LOT_SIZE_AI, sl=sl_level, tp=tp_level, sl_dist=dynamic_sl, tp_dist=dynamic_tp)
                     else:
                         ml_report = (
-                            f"{icon} *Desk-JPY Quant Predictor (Adaptive AI)*\n"
+                            f"{icon} *Desk-AquaFunded Quant Predictor (Adaptive AI)*\n"
                             f"Asset: `{asset}`\n"
                             f"Prediction: `{direction}`\n"
                             f"Confidence: `{probability*100:.1f}%` (WF WR: `{est_win_rate*100:.1f}%`)\n"
@@ -370,7 +370,7 @@ async def get_signal():
                 print(f"AI ({asset}): Not enough data or prediction failed.")
 
     print("\n" + "="*60)
-    print("Desk-JPY Scan Complete.")
+    print("Desk-AquaFunded Scan Complete.")
     print("="*60)
     mt5.shutdown()
 

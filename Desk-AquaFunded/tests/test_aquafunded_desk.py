@@ -14,9 +14,9 @@ from mt5_executor import MAGIC_NUMBERS
 from news_manager import is_in_danger_zone
 
 
-class JpyDeskTests(unittest.TestCase):
+class AquaFundedDeskTests(unittest.TestCase):
     def test_magic_number_isolation(self):
-        """Ensure Desk-JPY magic number does not collide with Desk-5k or Desk-10k (111, 123456)"""
+        """Ensure Desk-AquaFunded magic number does not collide with Desk-5k or Desk-10k (111, 123456)"""
         self.assertEqual(MAGIC_NUMBERS['AI'], 444)
         self.assertNotIn(MAGIC_NUMBERS['AI'], [111, 222, 333, 123456])
 
@@ -40,7 +40,7 @@ class JpyDeskTests(unittest.TestCase):
         self.assertAlmostEqual(eur_min_sl, 0.0015)
 
     def test_symbols_and_lot_config(self):
-        """Verify Desk-JPY configuration targets USDJPY, USDCAD, and EURUSD with 0.08 lot size"""
+        """Verify Desk-AquaFunded configuration targets USDJPY, USDCAD, and EURUSD with 0.08 lot size"""
         from dotenv import dotenv_values
         env_vals = dotenv_values(ROOT / ".env")
         self.assertEqual(float(env_vals.get("LOT_SIZE_AI")), 0.08)

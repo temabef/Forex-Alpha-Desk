@@ -20,31 +20,35 @@ class JpyDeskTests(unittest.TestCase):
         self.assertEqual(MAGIC_NUMBERS['AI'], 444)
         self.assertNotIn(MAGIC_NUMBERS['AI'], [111, 222, 333, 123456])
 
-    def test_jpy_pip_math(self):
-        """Verify 2-decimal JPY pip scaling (0.01 per pip) for USDJPY"""
-        sym = "USDJPY"
-        pip_size = 0.01 if "JPY" in sym else 0.0001
-        self.assertEqual(pip_size, 0.01)
+    def test_multi_major_pip_math(self):
+        """Verify pip scaling for both JPY and standard 5-digit majors"""
+        # USDJPY (0.01 per pip, 20-pip min safety floor)
+        jpy_pip = 0.01 if "JPY" in "USDJPY" else 0.0001
+        self.assertEqual(jpy_pip, 0.01)
+        jpy_min_sl = (20 if "JPY" in "USDJPY" else 15) * jpy_pip
+        self.assertAlmostEqual(jpy_min_sl, 0.20)
         
-        # Minimum safety SL distance of 20 pips
-        min_sl = 20 * pip_size
-        self.assertAlmostEqual(min_sl, 0.20)
+        # USDCAD & EURUSD (0.0001 per pip, 15-pip min safety floor)
+        cad_pip = 0.01 if "JPY" in "USDCAD" else 0.0001
+        self.assertEqual(cad_pip, 0.0001)
+        cad_min_sl = (20 if "JPY" in "USDCAD" else 15) * cad_pip
+        self.assertAlmostEqual(cad_min_sl, 0.0015)
         
-        # TP with 1.5x R:R
-        tp_dist = min_sl * 1.5
-        self.assertAlmostEqual(tp_dist, 0.30)
+        eur_pip = 0.01 if "JPY" in "EURUSD" else 0.0001
+        self.assertEqual(eur_pip, 0.0001)
+        eur_min_sl = (20 if "JPY" in "EURUSD" else 15) * eur_pip
+        self.assertAlmostEqual(eur_min_sl, 0.0015)
 
-    def test_usdjpy_exclusive_config(self):
-        """Verify Desk-JPY configuration is exclusively USDJPY with 0.15 lot size"""
+    def test_symbols_and_lot_config(self):
+        """Verify Desk-JPY configuration targets USDJPY, USDCAD, and EURUSD with 0.08 lot size"""
         from dotenv import dotenv_values
         env_vals = dotenv_values(ROOT / ".env")
-        self.assertEqual(float(env_vals.get("LOT_SIZE_AI")), 0.15)
+        self.assertEqual(float(env_vals.get("LOT_SIZE_AI")), 0.08)
         
-        # Verify get_current_signal targets USDJPY only
+        # Verify get_current_signal targets all three majors
         with open(ROOT / "get_current_signal.py", "r", encoding="utf-8") as f:
             code = f.read()
-        self.assertIn('symbols = ["USDJPY"]', code)
-        self.assertNotIn('symbols = ["USDJPY", "GBPJPY", "EURJPY"]', code)
+        self.assertIn('symbols = ["USDJPY", "USDCAD", "EURUSD"]', code)
 
     def test_ml_features_generation(self):
         """Verify feature engineering produces all 14 expected features"""

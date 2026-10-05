@@ -26,8 +26,8 @@ def is_in_danger_zone():
         now_utc = datetime.now(timezone.utc)
         
         for event in news_data:
-            # High impact news for our traded USDJPY desk currencies: USD, JPY
-            if event.get('impact') == 'High' and event.get('country') in ['USD', 'JPY']:
+            # High impact news for our traded currencies: USD, JPY, EUR, CAD
+            if event.get('impact') == 'High' and event.get('country') in ['USD', 'JPY', 'EUR', 'CAD']:
                 event_date_str = event.get('date')
                 try:
                     event_time = datetime.fromisoformat(event_date_str)

@@ -230,8 +230,8 @@ async def get_signal():
     except Exception as e:
         print(f"⚠️ Error checking AI breakeven stops: {e}")
 
-    # --- YEN ASSETS CONFIG (USDJPY EXCLUSIVE) ---
-    symbols = ["USDJPY"]
+    # --- MULTI-MAJOR ASSETS CONFIG (USDJPY, USDCAD, EURUSD) ---
+    symbols = ["USDJPY", "USDCAD", "EURUSD"]
     raw_data = {}
 
     for symbol in symbols:
@@ -243,7 +243,7 @@ async def get_signal():
         raw_data[symbol] = df
 
     print("\n" + "="*50)
-    print("STRATEGY 1: YEN QUANT PREDICTOR (Adaptive AI)")
+    print("STRATEGY 1: QUANT PREDICTOR (Adaptive AI Multi-Major)")
     print("="*50)
     
     current_utc_hour = datetime.now(timezone.utc).hour
@@ -273,14 +273,18 @@ async def get_signal():
                 # Dynamic SL = 2.5x ATR
                 dynamic_sl = atr * 2.5
                 
-                # All pairs are JPY: 1 pip = 0.01. Minimum safety floor = 20 pips (0.20 JPY)
-                pip_size = 0.01
-                min_sl_dist = 20 * pip_size
+                # Dynamic pip sizing & minimum safety SL floor
+                pip_size = 0.01 if "JPY" in asset else 0.0001
+                min_sl_dist = (20 if "JPY" in asset else 15) * pip_size
                 if dynamic_sl < min_sl_dist:
                     dynamic_sl = min_sl_dist
                     
                 dynamic_tp = dynamic_sl * 1.5
                 current_price = asset_df['Close'].iloc[-1]
+                p_fmt = ".2f" if "JPY" in asset else ".5f"
+                pip_multiplier = 100 if "JPY" in asset else 10000
+                tp_pips = int(dynamic_tp * pip_multiplier)
+                sl_pips = int(dynamic_sl * pip_multiplier)
                 
                 if probability >= ML_CONFIDENCE_THRESHOLD:
                     if est_win_rate < 0.42:
@@ -293,11 +297,11 @@ async def get_signal():
                     # EMA-20 Trend Gate Confirmation
                     ema_20 = asset_df['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
                     if prediction == 1 and current_price < ema_20:
-                        log_to_file(f"AI ({asset}): Signal UP rejected: Price ({current_price:.2f}) < EMA-20 ({ema_20:.2f}).")
+                        log_to_file(f"AI ({asset}): Signal UP rejected: Price ({current_price:{p_fmt}}) < EMA-20 ({ema_20:{p_fmt}}).")
                         print(f"AI ({asset}): Signal UP rejected (Price < EMA-20).")
                         continue
                     elif prediction == 0 and current_price > ema_20:
-                        log_to_file(f"AI ({asset}): Signal DOWN rejected: Price ({current_price:.2f}) > EMA-20 ({ema_20:.2f}).")
+                        log_to_file(f"AI ({asset}): Signal DOWN rejected: Price ({current_price:{p_fmt}}) > EMA-20 ({ema_20:{p_fmt}}).")
                         print(f"AI ({asset}): Signal DOWN rejected (Price > EMA-20).")
                         continue
                         
@@ -315,9 +319,6 @@ async def get_signal():
                     else: # DOWN
                         tp_level = execution_price - dynamic_tp
                         sl_level = execution_price + dynamic_sl
-                    
-                    tp_pips = int(dynamic_tp * 100)
-                    sl_pips = int(dynamic_sl * 100)
 
                     # --- CHECK ACTIVE AI POSITIONS & REVERSAL LOGIC ---
                     ai_pos_info = get_ai_position_info(symbol=asset)
@@ -339,7 +340,7 @@ async def get_signal():
                                 f"Asset: `{asset}`\n"
                                 f"Closed: `{current_pos_type}` (Ticket: `{existing_pos['ticket']}`)\n"
                                 f"New Signal: `{direction}` ({probability*100:.1f}% confidence)\n"
-                                f"Target TP: `{tp_level:.2f}` (~{tp_pips} pips)\n"
+                                f"Target TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
                                 f"Action: Reversing to `{signal_pos_type}`"
                             )
                             await send_telegram_msg(reversal_msg)
@@ -352,10 +353,10 @@ async def get_signal():
                             f"Asset: `{asset}`\n"
                             f"Prediction: `{direction}`\n"
                             f"Confidence: `{probability*100:.1f}%` (WF WR: `{est_win_rate*100:.1f}%`)\n"
-                            f"Price: `{execution_price:.2f}`\n\n"
-                            f"🎯 *Adaptive JPY Targets:* \n"
-                            f"TP: `{tp_level:.2f}` (~{tp_pips} pips)\n"
-                            f"SL: `{sl_level:.2f}` (~{sl_pips} pips)\n\n"
+                            f"Price: `{execution_price:{p_fmt}}`\n\n"
+                            f"🎯 *Adaptive Targets:* \n"
+                            f"TP: `{tp_level:{p_fmt}}` (~{tp_pips} pips)\n"
+                            f"SL: `{sl_level:{p_fmt}}` (~{sl_pips} pips)\n\n"
                             f"Action: Entering {'Long' if prediction == 1 else 'Short'} ({LOT_SIZE_AI} lot)"
                         )
                         log_to_file(f"AI: Signal Sent ({asset} {direction}, Confidence: {probability*100:.1f}%)")

@@ -13,7 +13,7 @@ MAGIC_NUMBERS = {
     'AI': 444,
 }
 
-def execute_mt5_trade(strategy_name, action, symbol="USDJPY", volume=0.06, sl=None, tp=None, sl_dist=None, tp_dist=None):
+def execute_mt5_trade(strategy_name, action, symbol="USDJPY", volume=0.08, sl=None, tp=None, sl_dist=None, tp_dist=None):
     """
     Professional Trade Executor for Desk-JPY. 
     Handles price rounding, filling modes, and strategy-specific SL/TP.
